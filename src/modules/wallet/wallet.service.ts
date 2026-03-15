@@ -177,24 +177,51 @@ export class WalletService {
 
   async debitWallet(userId: string, amount: number, description: string) {
     const { data: wallet } = await this.supabase.admin
-      .from('wallets').select('id, balance').eq('user_id', userId).eq('is_active', true).single();
+      .from('wallets')
+      .select('id, balance, points, total_funded, total_spent')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .single();
 
     if (!wallet) throw new NotFoundException('Wallet not found');
-    if (wallet.balance < amount) throw new BadRequestException({ code: 'INSUFFICIENT_BALANCE', message: 'Insufficient wallet balance' });
+    if (wallet.balance < amount) {
+      throw new BadRequestException({
+        code: 'INSUFFICIENT_BALANCE',
+        message: 'Insufficient wallet balance',
+        currentBalance: wallet.balance,
+        required: amount,
+        shortfall: amount - wallet.balance,
+      });
+    }
 
     const balanceBefore = wallet.balance;
-    const balanceAfter = balanceBefore - amount;
+    const balanceAfter  = balanceBefore - amount;
+    const newTotalSpent = Number(wallet.total_spent) + amount;
 
     await this.supabase.admin.from('wallets')
-      .update({ balance: balanceAfter, total_spent: this.supabase.admin.rpc('increment', { x: amount }) })
+      .update({ balance: balanceAfter, total_spent: newTotalSpent })
       .eq('id', wallet.id);
 
     await this.supabase.admin.from('wallet_transactions').insert({
-      wallet_id: wallet.id, user_id: userId, type: 'DEBIT',
-      amount, balance_before: balanceBefore, balance_after: balanceAfter, description,
+      wallet_id:      wallet.id,
+      user_id:        userId,
+      type:           'DEBIT',
+      amount,
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description,
     });
 
-    return { balanceBefore, balanceAfter };
+    // Return a full wallet snapshot so callers can propagate to the frontend
+    return {
+      walletId:       wallet.id,
+      balanceBefore,
+      balanceAfter,
+      deducted:       amount,
+      points:         wallet.points,
+      totalFunded:    wallet.total_funded,
+      totalSpent:     newTotalSpent,
+    };
   }
 
   async creditWallet(userId: string, amount: number, description: string) {

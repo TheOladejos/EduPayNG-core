@@ -6,6 +6,7 @@ import axios from 'axios';
 import { SupabaseService } from '../../common/supabase/supabase.service';
 import { WalletService } from '../wallet/wallet.service';
 import { RevenueService } from '../../common/services/revenue.service';
+import { SettlementService } from '../../common/services/settlement.service';
 import { PurchaseTokensDto, ValidateTokenDto, TokenPaymentMethod } from './tokens.dto';
 import { paginate, PaginationDto } from '../../common/dto/pagination.dto';
 import { generateRef, generateTokenCode, generateSerialNumber } from '../../common/helpers/generators';
@@ -16,6 +17,7 @@ export class TokensService {
     private supabase: SupabaseService,
     private wallet: WalletService,
     private revenue: RevenueService,
+    private settlement: SettlementService,
     private config: ConfigService,
   ) {}
 
@@ -43,7 +45,12 @@ export class TokensService {
     const reference = generateRef('TP');
 
     if (dto.paymentMethod === TokenPaymentMethod.WALLET) {
-      await this.wallet.debitWallet(userId, totalAmount, `${institution.short_name} Token x${dto.quantity}`);
+      // debitWallet now returns the full wallet snapshot
+      const walletSnapshot = await this.wallet.debitWallet(
+        userId,
+        totalAmount,
+        `${institution.short_name} Token x${dto.quantity}`,
+      );
 
       const tokenInserts = Array.from({ length: dto.quantity }, () => ({
         user_id: userId,
@@ -67,9 +74,9 @@ export class TokensService {
         metadata: { institutionId: dto.institutionId, quantity: dto.quantity, deliveryMethod: dto.deliveryMethod },
       }).select().single();
 
-      // ── Record revenue: margin = selling price - vendor cost ──
-      // institution.vendor_cost is set per institution in the DB
       const vendorCost = (institution.vendor_cost ?? 0) * dto.quantity;
+
+      // ── Record revenue margin ────────────────────────────────
       await this.revenue.record({
         transactionId: txn?.id,
         userId,
@@ -78,6 +85,22 @@ export class TokensService {
         costAmount:   vendorCost,
         notes: `${institution.short_name} x${dto.quantity}`,
       });
+
+      // ── Record pending vendor payable ─────────────────────────
+      // This tracks the ₦vendorCost that is still sitting in our
+      // merchant account and must be paid out to WAEC/NECO/etc.
+      // Status stays PENDING until you manually settle with vendor.
+      if (txn?.id) {
+        await this.settlement.record({
+          transactionId: txn.id,
+          userId,
+          vendorType:   institution.code as any,   // 'WAEC' | 'NECO' | 'JAMB' | 'NABTEB'
+          grossAmount:  totalAmount,
+          vendorAmount: vendorCost,
+          paymentMethod: 'WALLET',
+          notes: `${institution.short_name} x${dto.quantity} — ref ${reference}`,
+        });
+      }
 
       // Queue deliveries
       if (tokens) {
@@ -90,11 +113,23 @@ export class TokensService {
         `Your ${dto.quantity} ${institution.short_name} token(s) are ready. Check your email/SMS.`, 'SUCCESS', 'TRANSACTION');
 
       return {
-        transactionId: txn?.id, reference, status: 'COMPLETED', amount: totalAmount,
+        transactionId: txn?.id,
+        reference,
+        status: 'COMPLETED',
+        amount: totalAmount,
         tokens: (tokens ?? []).map(t => ({
           id: t.id, tokenCode: t.token_code, serialNumber: t.serial_number,
           institution: institution.short_name, expiresAt: t.expires_at,
         })),
+        // ← Frontend uses this to update the wallet display instantly
+        walletSnapshot: {
+          balanceBefore: walletSnapshot.balanceBefore,
+          balanceAfter:  walletSnapshot.balanceAfter,
+          deducted:      totalAmount,
+          newBalance:    walletSnapshot.balanceAfter,
+          points:        walletSnapshot.points,
+          totalSpent:    walletSnapshot.totalSpent,
+        },
       };
     }
 
