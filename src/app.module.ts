@@ -16,6 +16,8 @@ import { SupportModule } from './modules/support/support.module';
 import { BookmarksModule } from './modules/bookmarks/bookmarks.module';
 import { ReferralsModule } from './modules/referrals/referrals.module';
 import { SupabaseModule } from './common/supabase/supabase.module';
+import { BillsModule } from '@modules/bills/bills.modules';
+import { GatewayModule } from '@modules/payments/gateway/gateway.module';
 
 @Module({
   imports: [
@@ -35,6 +37,7 @@ import { SupabaseModule } from './common/supabase/supabase.module';
 
     // Shared
     SupabaseModule,
+    GatewayModule,   // PaystackService, RemitaService, VtpassService — global
 
     // Feature modules
     AuthModule,
@@ -44,6 +47,7 @@ import { SupabaseModule } from './common/supabase/supabase.module';
     ExamsModule,
     AiModule,
     PaymentsModule,
+    BillsModule,
     StudyMaterialsModule,
     ScholarshipsModule,
     NotificationsModule,

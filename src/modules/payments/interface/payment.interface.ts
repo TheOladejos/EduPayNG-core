@@ -1,14 +1,13 @@
-export interface PaymentGateway {
-  initializePayment(data: {
-    email: string;
-    amount: number;
-    reference: string;
-    metadata?: Record<string, any>;
-  }): Promise<{ paymentUrl: string }>;
+export interface PaystackInitResult {
+  authorizationUrl: string;
+  accessCode: string;
+  reference: string;
+}
 
-  verifyPayment(reference: string): Promise<{
-    status: "success" | "failed" | "pending";
-    amount: number;
-    reference: string;
-  }>;
+export interface PaystackVerifyResult {
+  status: 'success' | 'failed' | 'abandoned' | 'pending';
+  amount: number;        // in kobo — divide by 100 for naira
+  reference: string;
+  channel: string;
+  paidAt: string | null;
 }

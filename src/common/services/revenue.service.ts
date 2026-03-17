@@ -3,6 +3,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 
 export type RevenueType =
   | 'TOKEN_MARGIN'
+  | 'BILLS_MARGIN'
   | 'EXAM_FEE'
   | 'AI_QUERY'
   | 'POINT_SALE'
