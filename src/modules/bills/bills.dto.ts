@@ -3,6 +3,7 @@ import {
   Min, Max, Matches,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Optional } from '@nestjs/common';
 
 export enum BillPaymentMethod {
   WALLET = 'WALLET',
@@ -35,7 +36,7 @@ export class BuyAirtimeDto {
 
 export class BuyDataDto {
   @ApiProperty({ description: 'Biller UUID from GET /bills/billers?category=DATA' })
-  @IsUUID()
+ @IsUUID()
   billerId: string;
 
   @ApiProperty({ example: '08012345678' })
@@ -43,9 +44,18 @@ export class BuyDataDto {
   @Matches(/^0[7-9][01]\d{8}$/, { message: 'Invalid Nigerian phone number' })
   phone: string;
 
-  @ApiProperty({ description: 'Product UUID from GET /bills/products?billerId=xxx' })
-  @IsUUID()
+  @ApiProperty({ description: 'Product Variation Code' })
+  @IsString()
   productId: string;
+
+  @ApiProperty({ description: 'Product Name' })
+  @IsString()
+  @Optional()
+  productName: string;
+
+  @ApiProperty({ description: 'Product Amount' })
+  @IsNumber()
+  amount: number;
 
   @ApiProperty({ enum: BillPaymentMethod, default: 'WALLET' })
   @IsEnum(BillPaymentMethod)

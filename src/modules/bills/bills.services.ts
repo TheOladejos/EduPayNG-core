@@ -4,6 +4,7 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Logger,
+  OnModuleDestroy,
 } from "@nestjs/common";
 import { SupabaseService } from "../../common/supabase/supabase.service";
 import { WalletService } from "../wallet/wallet.service";
@@ -12,11 +13,12 @@ import { paginate, PaginationDto } from "../../common/dto/pagination.dto";
 import { generateRef } from "../../common/helpers/generators";
 import { BuyAirtimeDto, BuyDataDto } from "./bills.dto";
 import { VtpassService } from "@modules/payments/gateway/vtPass.gateway";
-
+import { categorizeData } from "@common/helpers/helpers";
 
 @Injectable()
-export class BillsService {
+export class BillsService implements OnModuleDestroy {
   private readonly logger = new Logger(BillsService.name);
+  private readonly billersCache = new Map<string, any>(); // Cache biller details to avoid repeated DB calls during purchase flow
 
   constructor(
     private supabase: SupabaseService,
@@ -24,6 +26,9 @@ export class BillsService {
     private revenue: RevenueService,
     private vtpass: VtpassService,
   ) {}
+  onModuleDestroy() {
+    this.billersCache.clear();
+  }
 
   // ── Catalog endpoints (public) ────────────────────────────────
 
@@ -36,27 +41,33 @@ export class BillsService {
     return data ?? [];
   }
 
+  async clearBillerCache() {
+    this.billersCache.clear();
+    this.logger.log("Biller cache cleared manually.");
+    return { message: "Cache cleared" };
+  }
+
   async getBillers(categoryCode?: string) {
-    let q = this.supabase.admin
-      .from("billers")
-      .select(
-        "id, category_code, vtpass_code, name, short_name, logo_url, supports_verify",
-      )
-      .eq("is_active", true)
-      .order("display_order");
-    if (categoryCode) q = q.eq("category_code", categoryCode);
-    const { data } = await q;
-    return data ?? [];
+    // If categoryCode is provided, filter billers by category; otherwise return all billers
+    const q = await this.getAndSetBillerCache(); // Preload biller cache on start
+    if (categoryCode) return q.filter((b) => b.category_code === categoryCode);
+    return q ?? [];
   }
 
   async getProducts(billerId: string) {
-    const { data } = await this.supabase.admin
-      .from("bill_products")
-      .select("id, vtpass_code, name, description, amount, validity")
-      .eq("biller_id", billerId)
-      .eq("is_active", true);
-    return data ?? [];
+    const biller = await this.getBillerOrThrow(billerId);
+
+    const data = await this.vtpass.getVariations(biller.vtpass_code);
+    if (!data)
+      throw new NotFoundException({
+        code: "PRODUCT_NOT_FOUND",
+        message: "Bill product not found",
+      });
+
+    // sorting by daily, weekly, monthly etc. variations to get the most expensive one (usually the first one) for accurate billing
+    return categorizeData(data);
   }
+
   // ── Purchase: Airtime ─────────────────────────────────────────
 
   async buyAirtime(userId: string, dto: BuyAirtimeDto) {
@@ -151,20 +162,19 @@ export class BillsService {
 
   async buyData(userId: string, dto: BuyDataDto) {
     const biller = await this.getBillerOrThrow(dto.billerId, "DATA");
-    const product = await this.getProductOrThrow(dto.productId, dto.billerId);
     const reference = generateRef("DAT");
 
     const walletSnapshot = await this.wallet.debitWallet(
       userId,
-      product.amount,
-      `${biller.short_name} Data: ${product.name} → ${dto.phone}`,
+      dto.amount,
+      `${biller.name}: ${dto.productId} → ${dto.phone}`,
     );
 
     const txn = await this.createTransaction(
       userId,
       reference,
       "BILL_DATA",
-      product.amount,
+      dto.amount,
     );
     const billTxn = await this.createBillTransaction({
       userId,
@@ -172,17 +182,17 @@ export class BillsService {
       billerId: dto.billerId,
       categoryCode: "DATA",
       customerPhone: dto.phone,
-      amount: product.amount,
-      productCode: product.vtpass_code,
-      productName: product.name,
+      amount: dto.amount,
+      productCode: dto.productId,
+      productName: dto.productName,
     });
 
     try {
       const result = await this.vtpass.buyData({
         serviceId: biller.vtpass_code,
         phone: dto.phone,
-        variationCode: product.vtpass_code,
-        amountNaira: product.amount,
+        variationCode: dto.productId,
+        amountNaira: dto.amount,
       });
 
       if (result.status === "delivered") {
@@ -191,13 +201,13 @@ export class BillsService {
           txn.id,
           billTxn.id,
           result,
-          product.amount,
+          dto.amount,
           "DATA",
         );
         await this.wallet.sendNotification(
           userId,
           "✅ Data Activated",
-          `${product.name} activated on ${dto.phone} via ${biller.short_name}`,
+          `${dto.productName} activated on ${dto.phone} via ${biller.short_name}`,
           "SUCCESS",
           "BILL",
         );
@@ -205,8 +215,8 @@ export class BillsService {
           status: "SUCCESS",
           reference,
           phone: dto.phone,
-          product: product.name,
-          amount: product.amount,
+          product: dto.productName,
+          amount: dto.amount,
           walletSnapshot,
         };
       }
@@ -215,7 +225,7 @@ export class BillsService {
         userId,
         txn.id,
         billTxn.id,
-        product.amount,
+        dto.amount,
         dto.phone,
       );
       throw new BadRequestException({
@@ -228,7 +238,7 @@ export class BillsService {
           userId,
           txn.id,
           billTxn.id,
-          product.amount,
+          dto.amount,
           `${biller.short_name} Data failed`,
         );
       }
@@ -262,47 +272,47 @@ export class BillsService {
     return paginate(data ?? [], count ?? 0, page, limit);
   }
 
+   async getAndSetBillerCache() {
+    const cached = this.billersCache.get("all");
+    if (cached) return cached;
+
+    const { data, error } = await this.supabase.admin
+      .from("billers")
+      .select(
+        "id, vtpass_code, name, short_name, category_code, logo_url, supports_verify",
+      )
+      .eq("is_active", true)
+      .order("display_order");
+
+    if (error || !data) {
+      throw new InternalServerErrorException(
+        "Failed to load biller configuration",
+      );
+    }
+    this.billersCache.set("all", data); // Cache all billers for quick access during purchase flow
+    return data;
+  }
+
   // ── Private helpers ───────────────────────────────────────────
 
   private async getBillerOrThrow(billerId: string, expectedCategory?: string) {
-    const { data } = await this.supabase.admin
-      .from("billers")
-      .select(
-        "id, vtpass_code, name, short_name, category_code, supports_verify",
-      )
-      .eq("id", billerId)
-      .eq("is_active", true)
-      .single();
+    const q = await this.getAndSetBillerCache(); // Ensure cache is loaded
 
-    if (!data)
+    const biller = q.find((b) => b.id === billerId);
+
+    if (!biller)
       throw new NotFoundException({
         code: "BILLER_NOT_FOUND",
         message: "Biller not found or inactive",
       });
-    if (expectedCategory && data.category_code !== expectedCategory) {
+
+    if (expectedCategory && biller.category_code !== expectedCategory) {
       throw new BadRequestException({
         code: "WRONG_CATEGORY",
         message: `Expected ${expectedCategory} biller`,
       });
     }
-    return data;
-  }
-
-  private async getProductOrThrow(productId: string, billerId: string) {
-    const { data } = await this.supabase.admin
-      .from("bill_products")
-      .select("id, vtpass_code, name, amount")
-      .eq("id", productId)
-      .eq("biller_id", billerId)
-      .eq("is_active", true)
-      .single();
-
-    if (!data)
-      throw new NotFoundException({
-        code: "PRODUCT_NOT_FOUND",
-        message: "Bill product not found",
-      });
-    return data;
+    return biller;
   }
 
   private async createTransaction(
@@ -404,7 +414,6 @@ export class BillsService {
     amount: number,
     recipient: string,
   ) {
-
     await Promise.all([
       // Refund wallet
       this.wallet.creditWallet(
