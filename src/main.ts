@@ -32,7 +32,7 @@ async function bootstrap() {
   app.use(bodyParser.urlencoded({ extended: true }));
 
   app.use(helmet());
-  app.use(compression());
+  // app.use(compression());
 
   app.enableCors({
     origin: nodeEnv === 'production'

@@ -86,7 +86,7 @@ export class WalletService {
       amountNaira: dto.amount,
       reference,
       callbackUrl:
-        dto.callbackUrl ?? `${this.config.get("APP_URL")}/wallet/fund/callback`,
+        dto.callbackUrl ?? `${this.config.get("APP_URL")}/wallet`,
       metadata: { userId, transactionId: txn.id, type: "WALLET_FUNDING" },
     });
 

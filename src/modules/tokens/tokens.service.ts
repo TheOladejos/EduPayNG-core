@@ -34,14 +34,14 @@ export class TokensService {
   async getInstitutions() {
     const { data, error } = await this.supabase.admin
       .from('institutions')
-      .select('id, code, name, short_name, vtpass_code, logo_url, description')
+      .select('id, code, name, short_name, logo_url, description')
       .eq('is_active', true)
       .order('display_order');
 
     if (error) throw new InternalServerErrorException(error.message);
     return (data ?? []).map(i => ({
       id: i.id, code: i.code, name: i.name, shortName: i.short_name,
-      vtpassCode: i.vtpass_code, logoUrl: i.logo_url, description: i.description,
+       logoUrl: i.logo_url, description: i.description,
     }));
   }
 
