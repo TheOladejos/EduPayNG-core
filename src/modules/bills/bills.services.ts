@@ -272,7 +272,11 @@ export class BillsService implements OnModuleDestroy {
     return paginate(data ?? [], count ?? 0, page, limit);
   }
 
-   async getAndSetBillerCache() {
+  
+
+  // ── Private helpers ───────────────────────────────────────────
+
+  private async getAndSetBillerCache() {
     const cached = this.billersCache.get("all");
     if (cached) return cached;
 
@@ -292,8 +296,6 @@ export class BillsService implements OnModuleDestroy {
     this.billersCache.set("all", data); // Cache all billers for quick access during purchase flow
     return data;
   }
-
-  // ── Private helpers ───────────────────────────────────────────
 
   private async getBillerOrThrow(billerId: string, expectedCategory?: string) {
     const q = await this.getAndSetBillerCache(); // Ensure cache is loaded

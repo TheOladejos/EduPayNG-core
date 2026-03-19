@@ -1,4 +1,4 @@
-import { IsUUID, IsInt, IsEnum, IsString, Min, Max, IsOptional } from 'class-validator';
+import { IsUUID, IsInt, IsEnum, IsString, Min, Max, IsOptional, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum DeliveryMethod { EMAIL = 'EMAIL', SMS = 'SMS', BOTH = 'BOTH' }
@@ -9,6 +9,11 @@ export class PurchaseTokensDto {
   @ApiProperty({ minimum: 1, maximum: 50 }) @IsInt() @Min(1) @Max(50) quantity: number;
   @ApiProperty({ enum: TokenPaymentMethod }) @IsEnum(TokenPaymentMethod) paymentMethod: TokenPaymentMethod;
   @ApiProperty({ enum: DeliveryMethod }) @IsEnum(DeliveryMethod) deliveryMethod: DeliveryMethod;
+ @ApiProperty({ example: 500, minimum: 50, maximum: 50000 })
+  @IsNumber()
+  @Min(50, { message: 'Minimum airtime is ₦50' })
+  @Max(50000)
+  amount: number;
 }
 
 export class ValidateTokenDto {

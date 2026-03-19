@@ -18,6 +18,13 @@ export class TokensController {
     return this.tokensService.getInstitutions();
   }
 
+  @Get('products/:serviceId')
+  @Public()
+  @ApiOperation({ summary: 'Get products for a specific service' })
+  getProducts(@Query('serviceId') serviceId: string) {
+    return this.tokensService.getProducts(serviceId);
+  }
+
   @Post('purchase')
   @ApiBearerAuth('JWT')
   @HttpCode(HttpStatus.CREATED)

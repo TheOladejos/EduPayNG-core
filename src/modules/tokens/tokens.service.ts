@@ -10,7 +10,7 @@ import { PurchaseTokensDto, ValidateTokenDto, TokenPaymentMethod } from './token
 import { paginate, PaginationDto } from '../../common/dto/pagination.dto';
 import { generateRef } from '../../common/helpers/generators';
 import { RemitaService } from '@modules/payments/gateway/remita.gateway';
-import { VtpassService } from '@modules/payments/gateway/vtPass.gateway';
+import { VtpassBillResult, VtpassService } from '@modules/payments/gateway/vtPass.gateway';
 
 // Gateway routing per institution:
 //   VTPASS  → WAEC, JAMB    (VTPass supports these natively)
@@ -34,17 +34,28 @@ export class TokensService {
   async getInstitutions() {
     const { data, error } = await this.supabase.admin
       .from('institutions')
-      .select('id, code, name, short_name, token_price, logo_url, description, gateway')
+      .select('id, code, name, short_name, vtpass_code, logo_url, description')
       .eq('is_active', true)
       .order('display_order');
 
     if (error) throw new InternalServerErrorException(error.message);
     return (data ?? []).map(i => ({
       id: i.id, code: i.code, name: i.name, shortName: i.short_name,
-      tokenPrice: i.token_price, logoUrl: i.logo_url, description: i.description,
-      gateway: i.gateway,
+      vtpassCode: i.vtpass_code, logoUrl: i.logo_url, description: i.description,
     }));
   }
+
+
+    async getProducts(serviceId: string) {
+      const data = await this.vtpass.getVariations(serviceId);
+      if (!data)
+        throw new NotFoundException({
+          code: "PRODUCT_NOT_FOUND",
+          message: "Bill product not found",
+        });
+  
+      return data;
+    }
 
   async purchase(userId: string, dto: PurchaseTokensDto) {
     const { data: institution } = await this.supabase.admin
@@ -56,12 +67,12 @@ export class TokensService {
 
     if (!institution) throw new NotFoundException({ code: 'INSTITUTION_NOT_FOUND', message: 'Institution not found' });
 
-    const gateway     = institution.gateway ?? REMITA_GATEWAY;
-    const totalAmount = institution.token_price * dto.quantity;
+    const gateway     = institution.code === 'WAEC' || institution.code === 'JAMB' ? VTPASS_GATEWAY : REMITA_GATEWAY;
+    const totalAmount = dto.amount || institution.token_price * dto.quantity;
     const reference   = generateRef('TP');
-    const vendorCost  = (institution.vendor_cost ?? 0) * dto.quantity;
+    let vendorCost;
 
-    this.logger.log(`Token purchase: ${institution.code} via ${gateway} — ₦${totalAmount}`);
+    this.logger.log(`Token purchase: ${institution.code} — ₦${totalAmount}`);
 
     // ═══════════════════════════════════════════════════
     // WALLET PAYMENT — debit first, then call gateway
@@ -69,7 +80,7 @@ export class TokensService {
     if (dto.paymentMethod === TokenPaymentMethod.WALLET) {
 
       // Pre-check vendor balance before debiting user
-      await this.checkVendorBalance(gateway, vendorCost, institution.short_name);
+      await this.checkVendorBalance(gateway, totalAmount, institution.short_name);
 
       // Debit wallet — throws if insufficient balance
       const walletSnapshot = await this.wallet.debitWallet(
@@ -84,14 +95,15 @@ export class TokensService {
       }).select().single();
 
       // Call the correct gateway to get real tokens
-      let purchasedTokens: Array<{ tokenCode: string; serialNumber: string; expiresAt: string; rawResponse: any }>;
+      let purchasedTokens: any;
+      
 
       try {
         if (institution.code === 'WAEC' || institution.code === 'JAMB') {
           // WAEC or JAMB — use VTPass
           const userPhone = await this.getUserPhone(userId);
           purchasedTokens = await this.vtpass.purchaseToken({
-            serviceId: institution.vtpass_service_id ?? institution.code.toLowerCase(),
+            serviceId: institution.code.toLowerCase(),
             quantity:  dto.quantity,
             reference,
             phone: userPhone,
@@ -118,22 +130,40 @@ export class TokensService {
           message: `Failed to purchase ${institution.short_name} token. Your wallet has been refunded.`,
         });
       }
-
-      // Save real tokens from gateway into DB
-      const tokenInserts = purchasedTokens.map(t => ({
+      vendorCost = (totalAmount - (totalAmount * (purchasedTokens.commission_rate/100))) * dto.quantity; // for revenue recording — this is the cost we pay to gateway
+      
+      const tokenDetails = {
         user_id:        userId,
         institution_id: dto.institutionId,
-        token_code:     t.tokenCode,
-        serial_number:  t.serialNumber,
-        remita_ref:     gateway === REMITA_GATEWAY ? reference : null,
-        status:         'ACTIVE',
-        purchased_at:   new Date().toISOString(),
-        expires_at:     t.expiresAt,
-        raw_response:   t.rawResponse,
-      }));
+        ref:  reference ,
+        purchased_at:   new Date().toISOString()
+      }
+
+      let  tokenInserts: any;
+       const {cards, token, Pin} = purchasedTokens;
+      if (institution.code === 'WAEC') {
+        token ?  tokenInserts = (token  ?? [])?.map((card: any) => ({
+          ...tokenDetails,
+          token_code: card.token,
+          serial_number: card.transactionId,
+        })) :
+        tokenInserts = cards?.map((card: any) => ({
+          ...tokenDetails,
+          token_code: card.Pin,
+          serial_number: card.serial,
+        }));
+      }
+if (institution.code === 'JAMB') {
+    tokenInserts = {
+        ...tokenDetails,
+        token_code: Pin,
+    };
+}
+    
+      // Save real tokens from gateway into DB
 
       const { data: tokens, error: tokenErr } = await this.supabase.admin
-        .from('tokens').insert(tokenInserts).select('id, token_code, serial_number, expires_at');
+        .from('tokens').insert(tokenInserts).select('id, token_code, serial_number');
 
       if (tokenErr) {
         // Critical: tokens purchased but DB save failed — do NOT refund
@@ -162,7 +192,7 @@ export class TokensService {
         gateway,
         tokens: (tokens ?? []).map(t => ({
           id: t.id, tokenCode: t.token_code, serialNumber: t.serial_number,
-          institution: institution.short_name, expiresAt: t.expires_at,
+          institution: institution.short_name
         })),
         walletSnapshot: {
           balanceBefore: walletSnapshot.balanceBefore,

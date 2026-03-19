@@ -13,12 +13,12 @@ import { v4 as uuid } from "uuid";
 export interface VtpassBillResult {
   reference: string;
   status: "delivered" | "failed" | "pending";
-  token?: string | Array<string>; // electricity token
-  quantity?: string; // electricity units
+  token?: Array<{ transactionId: string; token: string }>; // for exam tokens
+  quantity?: string;
   productName: string;
   purchased_code?: string;
   Pin?: string;
-  cards?: { pin: string; serial: string }; // for exam tokens
+  cards?: { pin: string; serial: string }[]; // for exam tokens
   commission_rate: number; // for bills with variable commission
 }
 
@@ -41,7 +41,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
   private readonly CACHE_TTL = 3600 * 1000;
   private cleanupInterval: NodeJS.Timeout;
 
-  constructor(private config: ConfigService, private billsService: BillsService) {
+  constructor(private config: ConfigService) {
     const apiKey = config.getOrThrow("VTPASS_API_KEY");
     const pubKey = config.getOrThrow("VTPASS_PUBLIC_KEY");
     const baseUrl = config.get("VTPASS_BASE_URL", "https://vtpass.com/api");
@@ -98,6 +98,25 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ── Verify exam profile ID (JAMB PROFILE CODE) ─────────────────────────
+
+      async verifyProfileID(dto: {
+    serviceID: string; // 'waec' or 'jamb'
+    profileID: string; // candidate's registration number
+    variationCode: string; // e.g. 'utme-mock' or 'utme-no-mock'
+  }): Promise<{ isValid: boolean; name: string | null }> {
+     const { data } = await this.http.post("/merchant-verify", {
+      billersCode: dto.profileID,
+      serviceID: dto.serviceID,
+      type: dto.variationCode,
+     })
+      return {
+        isValid: data.code === "000",
+        name: data.content?.Customer_Name ?? null,
+      }
+  }
+
+
   // ── Purchase exam token via VTPass (WAEC, JAMB) ──────────────
   // VTPass supports WAEC and JAMB result checker token purchases
   // via their educational services API.
@@ -135,22 +154,8 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    // VTPass returns tokens array for result checker purchases
-    const tokens: any[] = data.purchased_code
-      ? [
-          {
-            pin: data.purchased_code,
-            serial: data.content?.transactions?.serial_number,
-          },
-        ]
-      : (data.content?.transactions?.pins ?? []);
 
-    return tokens.map((t: any) => ({
-      tokenCode: t.pin ?? t.token_code ?? t.tokenCode,
-      serialNumber: t.serial ?? t.serial_number ?? requestId,
-      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-      rawResponse: t,
-    }));
+    return result;
   }
 
   async clearVariationsCache(serviceId: string) {
@@ -293,11 +298,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     const { data } = await this.http.get(
       `/service-variations?serviceID=${serviceId}`,
     );
-    const biller = await this.billsService.getAndSetBillerCache();
-    const service = biller.services.find((s) => s.vtpass_code === serviceId);
-
     const variations = (data.content?.variations ?? []).map((v: any) => ({
-      logo_url: service?.logo_url,
       variationCode: v.variation_code,
       name: v.name,
       variationAmount: v.variation_amount,

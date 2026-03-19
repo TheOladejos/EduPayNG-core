@@ -90,11 +90,11 @@ export class RemitaService {
   // to match what Remita's support team provides in your API docs.
 
   async purchaseToken(params: {
-    institutionCode: string;  // 'WAEC' | 'NECO' | 'JAMB' | 'NABTEB'
+    institutionCode: string;  // 'NECO'  'NABTEB'
     quantity:        number;
     reference:       string;
     examineePhone?:  string;
-  }): Promise<RemitaTokenResult[]> {
+  }): Promise<any> {
     try {
       // Remita eBillsPay token purchase endpoint
       // Adjust this URL and payload to your specific Remita service agreement
