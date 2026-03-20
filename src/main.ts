@@ -36,7 +36,7 @@ async function bootstrap() {
 
   app.enableCors({
     origin: nodeEnv === 'production'
-      ? ['https://app.edupayng.com', 'https://edupayng.com']
+      ? ['https://app.edupayng.com', 'https://edupayng.com',"https://edu-pay-ng-core.vercel.app"]
       : '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
