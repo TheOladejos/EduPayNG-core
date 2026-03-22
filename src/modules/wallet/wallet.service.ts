@@ -6,20 +6,17 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { SupabaseService } from "../../common/supabase/supabase.service";
-import { PaystackService } from "../payments/gateway/paystack.gateway";
 import { FundWalletDto, PurchasePointsDto, PaymentMethod } from "./wallet.dto";
 import { paginate, PaginationDto } from "../../common/dto/pagination.dto";
 import { generateRef } from "../../common/helpers/generators";
+import { PaystackService } from "@modules/payments/gateway/paystack.gateway";
 
 @Injectable()
 export class WalletService {
-  private email: string | undefined
-  
   constructor(
     private supabase: SupabaseService,
     private paystack: PaystackService,
     private config: ConfigService,
-    
   ) {}
 
   async getWallet(userId: string) {
@@ -54,8 +51,8 @@ export class WalletService {
     // Fetch user email for Paystack (required)
     const { data: authUser } =
       await this.supabase.admin.auth.admin.getUserById(userId);
-    this.email = authUser?.user?.email;
-    if (!this.email)
+    const email = authUser?.user?.email;
+    if (!email)
       throw new BadRequestException({
         code: "USER_NOT_FOUND",
         message: "User not found",
@@ -82,11 +79,11 @@ export class WalletService {
 
     // ── Paystack handles all wallet funding ──
     const payment = await this.paystack.initialize({
-      email: this.email,
+      email,
       amountNaira: dto.amount,
       reference,
       callbackUrl:
-        dto.callbackUrl ?? `${this.config.get("APP_URL")}/wallet`,
+      dto.callbackUrl ?? `${this.config.get("APP_URL")}/wallet/fund/callback`,
       metadata: { userId, transactionId: txn.id, type: "WALLET_FUNDING" },
     });
 
@@ -223,7 +220,16 @@ export class WalletService {
       return { reference, pointsAwarded: totalPoints, status: "COMPLETED" };
     }
 
-    // External payment
+    // External payment via Paystack
+    const { data: authUser } =
+      await this.supabase.admin.auth.admin.getUserById(userId);
+    const email = authUser?.user?.email;
+    if (!email)
+      throw new BadRequestException({
+        code: "USER_NOT_FOUND",
+        message: "User not found",
+      });
+
     const { data: txn } = await this.supabase.admin
       .from("transactions")
       .insert({
@@ -233,31 +239,36 @@ export class WalletService {
         amount: pkg.amount,
         payment_method: dto.paymentMethod,
         status: "PENDING",
-        metadata: { packageId: pkg.id, pointsAwarded: totalPoints },
+        metadata: {
+          packageId: pkg.id,
+          pointsAwarded: totalPoints,
+          type: "POINT_PURCHASE",
+        },
       })
       .select()
       .single();
 
     const payment = await this.paystack.initialize({
+      email,
       amountNaira: pkg.amount,
       reference,
-      email: this.email as string,
       callbackUrl: `${this.config.get("APP_URL")}/wallet/points/callback`,
       metadata: {
         userId,
-        transactionId: txn.id,
         type: "POINT_PURCHASE",
-        description: `EduPayNG Points - ${pkg.name}`,
+        packageId: pkg.id,
+        pointsAwarded: totalPoints,
       },
     });
 
     return {
       transactionId: txn?.id,
-      reference: payment.reference,
-      paymentUrl: payment.authorizationUrl,
+      reference,
+      authorizationUrl: payment.authorizationUrl,
+      accessCode: payment.accessCode,
       amount: pkg.amount,
       pointsToReceive: totalPoints,
-      accessCode: payment.accessCode,
+      gateway: "PAYSTACK",
     };
   }
 

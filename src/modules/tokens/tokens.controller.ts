@@ -6,7 +6,7 @@ import { PaginationDto } from '../../common/dto/pagination.dto';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 
-@ApiTags('Tokens')
+ApiTags('Tokens')
 @Controller({ path: 'tokens', version: '1' })
 export class TokensController {
   constructor(private tokensService: TokensService) {}
@@ -16,13 +16,6 @@ export class TokensController {
   @ApiOperation({ summary: 'Get all active institutions (WAEC, NECO, JAMB, NABTEB)' })
   getInstitutions() {
     return this.tokensService.getInstitutions();
-  }
-
-  @Get('products/:serviceId')
-  @Public()
-  @ApiOperation({ summary: 'Get products for a specific service' })
-  getProducts(@Query('serviceId') serviceId: string) {
-    return this.tokensService.getProducts(serviceId);
   }
 
   @Post('purchase')

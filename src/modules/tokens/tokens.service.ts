@@ -1,22 +1,28 @@
 import {
-  Injectable, NotFoundException, BadRequestException,
-  InternalServerErrorException, Logger, ServiceUnavailableException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { SupabaseService } from '../../common/supabase/supabase.service';
-import { WalletService } from '../wallet/wallet.service';
-import { RevenueService } from '../../common/services/revenue.service';
-import { PurchaseTokensDto, ValidateTokenDto, TokenPaymentMethod } from './tokens.dto';
-import { paginate, PaginationDto } from '../../common/dto/pagination.dto';
-import { generateRef } from '../../common/helpers/generators';
-import { RemitaService } from '@modules/payments/gateway/remita.gateway';
-import { VtpassBillResult, VtpassService } from '@modules/payments/gateway/vtPass.gateway';
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { SupabaseService } from "../../common/supabase/supabase.service";
+import { WalletService } from "../wallet/wallet.service";
+import { RevenueService } from "../../common/services/revenue.service";
+import {
+  PurchaseTokensDto,
+  ValidateTokenDto,
+  TokenPaymentMethod,
+} from "./tokens.dto";
+import { paginate, PaginationDto } from "../../common/dto/pagination.dto";
+import { generateRef } from "../../common/helpers/generators";
+import { RemitaService } from "@modules/payments/gateway/remita.gateway";
+import { VtpassService } from "@modules/payments/gateway/vtPass.gateway";
+import { PaystackService } from "@modules/payments/gateway/paystack.gateway";
 
-// Gateway routing per institution:
-//   VTPASS  → WAEC, JAMB    (VTPass supports these natively)
-//   REMITA  → NECO, NABTEB  (Remita eBillsPay aggregates these)
-const VTPASS_GATEWAY  = 'VTPASS';
-const REMITA_GATEWAY  = 'REMITA';
+const VTPASS_GATEWAY = "VTPASS";
+const REMITA_GATEWAY = "REMITA";
 
 @Injectable()
 export class TokensService {
@@ -24,266 +30,646 @@ export class TokensService {
 
   constructor(
     private supabase: SupabaseService,
-    private wallet:   WalletService,
-    private revenue:  RevenueService,
-    private remita:   RemitaService,
-    private vtpass:   VtpassService,
-    private config:   ConfigService,
+    private wallet: WalletService,
+    private revenue: RevenueService,
+    private remita: RemitaService,
+    private vtpass: VtpassService,
+    private paystack: PaystackService,
+    private config: ConfigService,
   ) {}
 
   async getInstitutions() {
     const { data, error } = await this.supabase.admin
-      .from('institutions')
-      .select('id, code, name, short_name, logo_url, description')
-      .eq('is_active', true)
-      .order('display_order');
+      .from("institutions")
+      .select(
+        "id, code, name, short_name, token_price, logo_url, description, gateway",
+      )
+      .eq("is_active", true)
+      .order("display_order");
 
     if (error) throw new InternalServerErrorException(error.message);
-    return (data ?? []).map(i => ({
-      id: i.id, code: i.code, name: i.name, shortName: i.short_name,
-       logoUrl: i.logo_url, description: i.description,
+    return (data ?? []).map((i) => ({
+      id: i.id,
+      code: i.code,
+      name: i.name,
+      shortName: i.short_name,
+      tokenPrice: i.token_price,
+      logoUrl: i.logo_url,
+      description: i.description,
+      gateway: i.gateway,
     }));
   }
 
-
-    async getProducts(serviceId: string) {
-      const data = await this.vtpass.getVariations(serviceId);
-      if (!data)
-        throw new NotFoundException({
-          code: "PRODUCT_NOT_FOUND",
-          message: "Bill product not found",
-        });
-  
-      return data;
-    }
-
   async purchase(userId: string, dto: PurchaseTokensDto) {
     const { data: institution } = await this.supabase.admin
-      .from('institutions')
-      .select('*')
-      .eq('id', dto.institutionId)
-      .eq('is_active', true)
+      .from("institutions")
+      .select("*")
+      .eq("id", dto.institutionId)
+      .eq("is_active", true)
       .single();
 
-    if (!institution) throw new NotFoundException({ code: 'INSTITUTION_NOT_FOUND', message: 'Institution not found' });
+    if (!institution)
+      throw new NotFoundException({
+        code: "INSTITUTION_NOT_FOUND",
+        message: "Institution not found",
+      });
+    const gateway =
+      institution.code === "WAEC" || institution.code === "JAMB"
+        ? VTPASS_GATEWAY
+        : REMITA_GATEWAY;
+    const totalAmount = institution.token_price * dto.quantity;
+    const reference = generateRef("TP");
 
-    const gateway     = institution.code === 'WAEC' || institution.code === 'JAMB' ? VTPASS_GATEWAY : REMITA_GATEWAY;
-    const totalAmount = dto.amount || institution.token_price * dto.quantity;
-    const reference   = generateRef('TP');
-    let vendorCost;
-
-    this.logger.log(`Token purchase: ${institution.code} — ₦${totalAmount}`);
-
-    // ═══════════════════════════════════════════════════
-    // WALLET PAYMENT — debit first, then call gateway
-    // ═══════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════
+    // PATH 1: FULL WALLET PAYMENT
+    // User has enough balance — instant, no gateway redirect
+    // ═══════════════════════════════════════════════════════════
     if (dto.paymentMethod === TokenPaymentMethod.WALLET) {
-
-      // Pre-check vendor balance before debiting user
-      await this.checkVendorBalance(gateway, totalAmount, institution.short_name);
-
-      // Debit wallet — throws if insufficient balance
-      const walletSnapshot = await this.wallet.debitWallet(
-        userId, totalAmount, `${institution.short_name} Token x${dto.quantity}`,
+      await this.checkVendorBalance(
+        gateway,
+        totalAmount,
+        institution.short_name,
       );
 
-      // Create PENDING transaction
-      const { data: txn } = await this.supabase.admin.from('transactions').insert({
-        user_id: userId, reference, transaction_type: 'TOKEN_PURCHASE',
-        amount: totalAmount, payment_method: 'WALLET', status: 'PENDING',
-        metadata: { institutionId: dto.institutionId, institutionCode: institution.code, gateway, quantity: dto.quantity, deliveryMethod: dto.deliveryMethod },
-      }).select().single();
+      const walletSnapshot = await this.wallet.debitWallet(
+        userId,
+        totalAmount,
+        `${institution.short_name} Token x${dto.quantity}`,
+      );
 
-      // Call the correct gateway to get real tokens
-      let purchasedTokens: any;
-      
-
-      try {
-        if (institution.code === 'WAEC' || institution.code === 'JAMB') {
-          // WAEC or JAMB — use VTPass
-          const userPhone = await this.getUserPhone(userId);
-          purchasedTokens = await this.vtpass.purchaseToken({
-            serviceId: institution.code.toLowerCase(),
-            quantity:  dto.quantity,
-            reference,
-            phone: userPhone,
-            institutionName: institution.short_name,
-          });
-        } else {
-          // NECO or NABTEB — use Remita
-          purchasedTokens = await this.remita.purchaseToken({
+      const { data: txn } = await this.supabase.admin
+        .from("transactions")
+        .insert({
+          user_id: userId,
+          reference,
+          transaction_type: "TOKEN_PURCHASE",
+          amount: totalAmount,
+          payment_method: "WALLET",
+          status: "PENDING",
+          metadata: {
+            institutionId: dto.institutionId,
             institutionCode: institution.code,
-            quantity:        dto.quantity,
-            reference,
-          });
-        }
-      } catch (err: any) {
-        // Gateway failed — refund wallet immediately
-        this.logger.error(`${gateway} purchaseToken failed for ${reference}: ${err.message}`);
-        await this.wallet.creditWallet(userId, totalAmount, `Refund: ${institution.short_name} token purchase failed`);
-        await this.supabase.admin.from('transactions').update({ status: 'FAILED' }).eq('id', txn?.id);
-        await this.wallet.sendNotification(userId, '❌ Token Purchase Failed',
-          `${institution.short_name} token purchase failed. ₦${totalAmount.toLocaleString()} has been refunded.`,
-          'ERROR', 'TRANSACTION');
-        throw new ServiceUnavailableException({
-          code: 'TOKEN_PURCHASE_FAILED',
-          message: `Failed to purchase ${institution.short_name} token. Your wallet has been refunded.`,
-        });
-      }
-      vendorCost = (totalAmount - (totalAmount * (purchasedTokens.commission_rate/100))) * dto.quantity; // for revenue recording — this is the cost we pay to gateway
-      
-      const tokenDetails = {
-        user_id:        userId,
-        institution_id: dto.institutionId,
-        ref:  reference ,
-        purchased_at:   new Date().toISOString()
-      }
+            gateway,
+            quantity: dto.quantity,
+            deliveryMethod: dto.deliveryMethod,
+          },
+        })
+        .select()
+        .single();
 
-      let  tokenInserts: any;
-       const {cards, token, Pin} = purchasedTokens;
-      if (institution.code === 'WAEC') {
-        token ?  tokenInserts = (token  ?? [])?.map((card: any) => ({
-          ...tokenDetails,
-          token_code: card.token,
-          serial_number: card.transactionId,
-        })) :
-        tokenInserts = cards?.map((card: any) => ({
-          ...tokenDetails,
-          token_code: card.Pin,
-          serial_number: card.serial,
-        }));
-      }
-if (institution.code === 'JAMB') {
-    tokenInserts = {
-        ...tokenDetails,
-        token_code: Pin,
-    };
-}
-    
-      // Save real tokens from gateway into DB
+      return this.fulfillTokens({
+        userId,
+        txnId: txn!.id,
+        reference,
+        gateway,
+        institution,
+        quantity: dto.quantity,
+        deliveryMethod: dto.deliveryMethod,
+        totalAmount,
+        walletSnapshot,
+        paymentSource: "WALLET",
+      });
+    }
 
-      const { data: tokens, error: tokenErr } = await this.supabase.admin
-        .from('tokens').insert(tokenInserts).select('id, token_code, serial_number');
+    // ═══════════════════════════════════════════════════════════
+    // PATH 2: HYBRID PAYMENT (partial wallet + partial Paystack)
+    // User has some balance but not enough — top up the difference
+    // ═══════════════════════════════════════════════════════════
+    if (dto.paymentMethod === TokenPaymentMethod.HYBRID) {
+      const walletAmount = dto.walletAmount!;
+      const cardAmount = dto.cardAmount!;
 
-      if (tokenErr) {
-        // Critical: tokens purchased but DB save failed — do NOT refund
-        this.logger.error(`CRITICAL: Tokens purchased via ${gateway} but DB save failed. Ref: ${reference}`);
-        throw new InternalServerErrorException({
-          code: 'TOKEN_SAVE_FAILED',
-          message: `Tokens purchased but failed to save. Contact support with reference: ${reference}`,
+      // Validate amounts add up
+      if (Math.abs(walletAmount + cardAmount - totalAmount) > 1) {
+        throw new BadRequestException({
+          code: "INVALID_HYBRID_AMOUNTS",
+          message: `walletAmount (₦${walletAmount}) + cardAmount (₦${cardAmount}) must equal total (₦${totalAmount})`,
         });
       }
 
-      // Complete transaction and record revenue
-      await Promise.all([
-        this.supabase.admin.from('transactions').update({ status: 'COMPLETED', completed_at: new Date().toISOString() }).eq('id', txn?.id),
-        this.revenue.record({ transactionId: txn?.id, userId, revenueType: 'TOKEN_MARGIN', grossAmount: totalAmount, costAmount: vendorCost, notes: `${institution.short_name} x${dto.quantity} via ${gateway}` }),
-        tokens?.length ? this.supabase.admin.from('token_deliveries').insert(
-          tokens.map(t => ({ token_id: t.id, user_id: userId, delivery_method: dto.deliveryMethod, status: 'PENDING' }))
-        ) : Promise.resolve(),
-      ]);
+      // Validate wallet has the wallet portion
+      const { data: walletRow } = await this.supabase.admin
+        .from("wallets")
+        .select("id, balance")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .single();
+      if (!walletRow || walletRow.balance < walletAmount) {
+        throw new BadRequestException({
+          code: "INSUFFICIENT_BALANCE",
+          message: `Wallet balance ₦${walletRow?.balance ?? 0} is less than the wallet portion ₦${walletAmount}`,
+          currentBalance: walletRow?.balance ?? 0,
+          required: walletAmount,
+        });
+      }
 
-      await this.wallet.sendNotification(userId, '🎫 Token Purchase Successful',
-        `Your ${dto.quantity} ${institution.short_name} token(s) are ready. Check your email/SMS.`,
-        'SUCCESS', 'TRANSACTION');
+      await this.checkVendorBalance(
+        gateway,
+        totalAmount,
+        institution.short_name,
+      );
+
+      // Fetch user email for Paystack
+      const { data: authUser } =
+        await this.supabase.admin.auth.admin.getUserById(userId);
+      const email = authUser?.user?.email;
+      if (!email)
+        throw new BadRequestException({
+          code: "USER_NOT_FOUND",
+          message: "User not found",
+        });
+
+      // Create main transaction record (full amount)
+      const { data: txn } = await this.supabase.admin
+        .from("transactions")
+        .insert({
+          user_id: userId,
+          reference,
+          transaction_type: "TOKEN_PURCHASE",
+          amount: totalAmount,
+          payment_method: "HYBRID",
+          status: "PENDING",
+          metadata: {
+            institutionId: dto.institutionId,
+            institutionCode: institution.code,
+            gateway,
+            quantity: dto.quantity,
+            deliveryMethod: dto.deliveryMethod,
+            walletAmount,
+            cardAmount,
+            paymentMethod: "HYBRID",
+          },
+        })
+        .select()
+        .single();
+
+      // Place a HOLD on the wallet portion (reserve it, don't deduct yet)
+      // Deduction happens only after Paystack confirms the card portion
+      const holdBalance = walletRow.balance - walletAmount; // what user can still spend
+      await this.supabase.admin
+        .from("wallets")
+        .update({ balance: holdBalance })
+        .eq("id", walletRow.id);
+      await this.supabase.admin.from("wallet_holds").insert({
+        user_id: userId,
+        wallet_id: walletRow.id,
+        transaction_ref: reference,
+        hold_amount: walletAmount,
+        card_amount: cardAmount,
+        total_amount: totalAmount,
+        status: "HOLDING",
+        metadata: {
+          institutionId: dto.institutionId,
+          institutionCode: institution.code,
+          gateway,
+          quantity: dto.quantity,
+          deliveryMethod: dto.deliveryMethod,
+          txnId: txn!.id,
+        },
+      });
+
+      // Log the wallet reservation as a "hold" wallet transaction for transparency
+      await this.supabase.admin.from("wallet_transactions").insert({
+        wallet_id: walletRow.id,
+        user_id: userId,
+        type: "HOLD",
+        amount: walletAmount,
+        balance_before: walletRow.balance,
+        balance_after: holdBalance,
+        description: `Hold for ${institution.short_name} token — awaiting card payment of ₦${cardAmount}`,
+      });
+
+      // Initialize Paystack for the card portion ONLY
+      const paystackRef = generateRef("HC"); // HC = Hybrid Card
+      const payment = await this.paystack.initialize({
+        email,
+        amountNaira: cardAmount,
+        reference: paystackRef,
+        callbackUrl:
+          dto.callbackUrl ?? `${this.config.get("APP_URL")}/tokens/callback`,
+        metadata: {
+          userId,
+          type: "HYBRID_TOKEN_PURCHASE",
+          mainRef: reference, // links back to the main token transaction
+          walletAmount,
+          cardAmount,
+          institutionId: dto.institutionId,
+          institutionCode: institution.code,
+          gateway,
+          quantity: dto.quantity,
+          deliveryMethod: dto.deliveryMethod,
+        },
+      });
+
+      // Store Paystack reference in the hold record
+      await this.supabase.admin
+        .from("wallet_holds")
+        .update({ paystack_ref: paystackRef })
+        .eq("transaction_ref", reference);
+
+      this.logger.log(
+        `Hybrid payment initiated: ₦${walletAmount} held + ₦${cardAmount} via Paystack (${paystackRef})`,
+      );
 
       return {
-        transactionId: txn?.id, reference, status: 'COMPLETED', amount: totalAmount,
-        gateway,
-        tokens: (tokens ?? []).map(t => ({
-          id: t.id, tokenCode: t.token_code, serialNumber: t.serial_number,
-          institution: institution.short_name
-        })),
-        walletSnapshot: {
-          balanceBefore: walletSnapshot.balanceBefore,
-          balanceAfter:  walletSnapshot.balanceAfter,
-          deducted:      totalAmount,
-          newBalance:    walletSnapshot.balanceAfter,
-          points:        walletSnapshot.points,
-          totalSpent:    walletSnapshot.totalSpent,
-        },
+        transactionId: txn!.id,
+        reference,
+        paystackReference: paystackRef,
+        authorizationUrl: payment.authorizationUrl,
+        accessCode: payment.accessCode,
+        paymentType: "HYBRID",
+        walletAmount,
+        cardAmount,
+        totalAmount,
+        institution: institution.short_name,
+        message: `₦${walletAmount.toLocaleString()} reserved from wallet. Please complete ₦${cardAmount.toLocaleString()} via Paystack.`,
       };
     }
 
-    // ═══════════════════════════════════════════════════
-    // CARD PAYMENT — always via Remita payment page
-    // (Remita is the card payment processor for token orders)
-    // After card confirmed: webhook calls processCardTokenPurchase
-    // which routes to correct gateway (VTPass or Remita) for real tokens
-    // ═══════════════════════════════════════════════════
-    const { data: txn } = await this.supabase.admin.from('transactions').insert({
-      user_id: userId, reference, transaction_type: 'TOKEN_PURCHASE',
-      amount: totalAmount, payment_method: dto.paymentMethod, status: 'PENDING',
-      metadata: { institutionId: dto.institutionId, institutionCode: institution.code, gateway, quantity: dto.quantity, deliveryMethod: dto.deliveryMethod },
-    }).select().single();
+    // ═══════════════════════════════════════════════════════════
+    // PATH 3: FULL PAYSTACK PAYMENT (CARD / BANK_TRANSFER / USSD)
+    // All external payments go through Paystack.
+    // After Paystack confirms, webhook calls purchaseToken via correct gateway.
+    // ═══════════════════════════════════════════════════════════
+    const { data: authUser } =
+      await this.supabase.admin.auth.admin.getUserById(userId);
+    const email = authUser?.user?.email;
+    if (!email)
+      throw new BadRequestException({
+        code: "USER_NOT_FOUND",
+        message: "User not found",
+      });
 
-    const payment = await this.remita.initialize({
-      amountNaira: totalAmount, reference,
-      description: `EduPayNG - ${institution.name} Token x${dto.quantity}`,
-      callbackUrl: `${this.config.get('APP_URL')}/tokens/callback`,
+    const { data: txn } = await this.supabase.admin
+      .from("transactions")
+      .insert({
+        user_id: userId,
+        reference,
+        transaction_type: "TOKEN_PURCHASE",
+        amount: totalAmount,
+        payment_method: dto.paymentMethod,
+        status: "PENDING",
+        metadata: {
+          institutionId: dto.institutionId,
+          institutionCode: institution.code,
+          gateway,
+          quantity: dto.quantity,
+          deliveryMethod: dto.deliveryMethod,
+          paymentMethod: "PAYSTACK",
+        },
+      })
+      .select()
+      .single();
+
+    const payment = await this.paystack.initialize({
+      email,
+      amountNaira: totalAmount,
+      reference,
+      callbackUrl:
+        dto.callbackUrl ?? `${this.config.get("APP_URL")}/tokens/callback`,
+      metadata: {
+        userId,
+        type: "TOKEN_PURCHASE",
+        institutionId: dto.institutionId,
+        institutionCode: institution.code,
+        gateway,
+        quantity: dto.quantity,
+        deliveryMethod: dto.deliveryMethod,
+      },
     });
 
-    return { transactionId: txn?.id, reference, authorizationUrl: payment.paymentUrl, rrr: payment.rrr, amount: totalAmount, quantity: dto.quantity, gateway: 'REMITA_PAYMENT_PAGE' };
+    return {
+      transactionId: txn!.id,
+      reference,
+      authorizationUrl: payment.authorizationUrl,
+      accessCode: payment.accessCode,
+      amount: totalAmount,
+      quantity: dto.quantity,
+      gateway: "PAYSTACK",
+      institution: institution.short_name,
+    };
   }
 
-  async getMyTokens(userId: string, query: PaginationDto & { status?: string; institutionId?: string }) {
-    const page = query.page ?? 1; const limit = query.limit ?? 20; const offset = (page - 1) * limit;
-    let q = this.supabase.admin.from('tokens')
-      .select('*, institutions(id, code, short_name, name, logo_url, gateway)', { count: 'exact' })
-      .eq('user_id', userId).order('purchased_at', { ascending: false }).range(offset, offset + limit - 1);
-    if (query.status)        q = q.eq('status', query.status);
-    if (query.institutionId) q = q.eq('institution_id', query.institutionId);
+  // ── Called after payment confirmed — purchases real tokens ──────
+
+  async fulfillTokens(params: {
+    userId: string;
+    txnId: string;
+    reference: string;
+    gateway: string;
+    institution: any;
+    quantity: number;
+    deliveryMethod: string;
+    totalAmount: number;
+    walletSnapshot?: any;
+    paymentSource: "WALLET" | "PAYSTACK" | "HYBRID";
+  }) {
+    const {
+      userId,
+      txnId,
+      reference,
+      gateway,
+      institution,
+      quantity,
+      deliveryMethod,
+      totalAmount,
+      walletSnapshot,
+      paymentSource,
+    } = params;
+
+    let purchasedTokens: any;
+    let vendorCost;
+
+    try {
+      if (gateway === VTPASS_GATEWAY) {
+        const userPhone = await this.getUserPhone(userId);
+        purchasedTokens = await this.vtpass.purchaseToken({
+          serviceId: institution.code.toLowerCase(),
+          quantity,
+          reference,
+          phone: userPhone,
+        });
+      } else {
+        purchasedTokens = await this.remita.purchaseToken({
+          institutionCode: institution.code,
+          quantity,
+          reference,
+        });
+      }
+    } catch (err: any) {
+      this.logger.error(
+        `${gateway} purchaseToken failed for ${reference}: ${err.message}`,
+      );
+
+      // Refund based on payment source
+      if (paymentSource === "WALLET") {
+        await this.wallet.creditWallet(
+          userId,
+          totalAmount,
+          `Refund: ${institution.short_name} token purchase failed`,
+        );
+      }
+      // For PAYSTACK and HYBRID: the Paystack amount is non-refundable automatically.
+      // Admin must manually refund via Paystack dashboard. Wallet hold was already released.
+
+      await this.supabase.admin
+        .from("transactions")
+        .update({ status: "FAILED" })
+        .eq("id", txnId);
+      await this.wallet.sendNotification(
+        userId,
+        "❌ Token Purchase Failed",
+        `${institution.short_name} token purchase failed. ${paymentSource === "WALLET" ? `₦${totalAmount.toLocaleString()} has been refunded to your wallet.` : "Please contact support with reference: " + reference}`,
+        "ERROR",
+        "TRANSACTION",
+      );
+
+      if (paymentSource === "WALLET") {
+        throw new ServiceUnavailableException({
+          code: "TOKEN_PURCHASE_FAILED",
+          message: `Failed to purchase ${institution.short_name} token. Wallet has been refunded.`,
+        });
+      }
+      return; // For card payments, don't throw — just log and notify
+    }
+
+    vendorCost =
+      (totalAmount - totalAmount * (purchasedTokens.commission_rate / 100)) *
+      quantity; // for revenue recording — this is the cost we pay to gateway
+
+    const tokenDetails = {
+      user_id: userId,
+      institution_id: institution.id,
+      ref: reference,
+      purchased_at: new Date().toISOString(),
+    };
+
+    let tokenInserts: any;
+    const { cards, token, Pin } = purchasedTokens;
+    if (institution.code === "WAEC") {
+      token
+        ? (tokenInserts = (token ?? [])?.map((card: any) => ({
+            ...tokenDetails,
+            token_code: card.token,
+            serial_number: card.transactionId,
+          })))
+        : (tokenInserts = cards?.map((card: any) => ({
+            ...tokenDetails,
+            token_code: card.Pin,
+            serial_number: card.serial,
+          })));
+    }
+    if (institution.code === "JAMB") {
+      tokenInserts = {
+        ...tokenDetails,
+        token_code: Pin,
+      };
+    }
+
+    const { data: tokens, error: tokenErr } = await this.supabase.admin
+      .from("tokens")
+      .insert(tokenInserts)
+      .select("id, token_code, serial_number, expires_at");
+
+    if (tokenErr) {
+      this.logger.error(
+        `CRITICAL: Tokens purchased via ${gateway} but DB save failed. Ref: ${reference}`,
+      );
+      // Don't throw for card payments — tokens will be recovered manually
+      if (paymentSource === "WALLET") {
+        throw new InternalServerErrorException({
+          code: "TOKEN_SAVE_FAILED",
+          message: `Tokens purchased but failed to save. Contact support with reference: ${reference}`,
+        });
+      }
+      return;
+    }
+
+    await Promise.all([
+      this.supabase.admin
+        .from("transactions")
+        .update({ status: "COMPLETED", completed_at: new Date().toISOString() })
+        .eq("id", txnId),
+      this.revenue.record({
+        transactionId: txnId,
+        userId,
+        revenueType: "TOKEN_MARGIN",
+        grossAmount: totalAmount,
+        costAmount: vendorCost,
+        notes: `${institution.short_name} x${quantity} via ${gateway} (${paymentSource})`,
+      }),
+      tokens?.length
+        ? this.supabase.admin
+            .from("token_deliveries")
+            .insert(
+              tokens.map((t) => ({
+                token_id: t.id,
+                user_id: userId,
+                delivery_method: deliveryMethod,
+                status: "PENDING",
+              })),
+            )
+        : Promise.resolve(),
+    ]);
+
+    await this.wallet.sendNotification(
+      userId,
+      "🎫 Token Purchase Successful",
+      `Your ${quantity} ${institution.short_name} token(s) are ready. Check your email/SMS.`,
+      "SUCCESS",
+      "TRANSACTION",
+    );
+
+    return {
+      transactionId: txnId,
+      reference,
+      status: "COMPLETED",
+      amount: totalAmount,
+      gateway,
+      paymentSource,
+      tokens: (tokens ?? []).map((t) => ({
+        id: t.id,
+        tokenCode: t.token_code,
+        serialNumber: t.serial_number,
+        institution: institution.short_name,
+        expiresAt: t.expires_at,
+      })),
+      ...(walletSnapshot
+        ? {
+            walletSnapshot: {
+              balanceBefore: walletSnapshot.balanceBefore,
+              balanceAfter: walletSnapshot.balanceAfter,
+              deducted: totalAmount,
+              newBalance: walletSnapshot.balanceAfter,
+              points: walletSnapshot.points,
+              totalSpent: walletSnapshot.totalSpent,
+            },
+          }
+        : {}),
+    };
+  }
+
+  async getMyTokens(
+    userId: string,
+    query: PaginationDto & { status?: string; institutionId?: string },
+  ) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const offset = (page - 1) * limit;
+    let q = this.supabase.admin
+      .from("tokens")
+      .select(
+        "*, institutions(id, code, short_name, name, logo_url, gateway)",
+        { count: "exact" },
+      )
+      .eq("user_id", userId)
+      .order("purchased_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (query.status) q = q.eq("status", query.status);
+    if (query.institutionId) q = q.eq("institution_id", query.institutionId);
     const { data, error, count } = await q;
     if (error) throw new InternalServerErrorException(error.message);
-    return paginate((data ?? []).map(t => ({
-      id: t.id, tokenCode: t.token_code, serialNumber: t.serial_number, status: t.status,
-      institution: { id: t.institutions.id, code: t.institutions.code, name: t.institutions.name, shortName: t.institutions.short_name, logoUrl: t.institutions.logo_url },
-      purchasedAt: t.purchased_at, expiresAt: t.expires_at, usedAt: t.used_at ?? null,
-    })), count ?? 0, page, limit);
+    return paginate(
+      (data ?? []).map((t) => ({
+        id: t.id,
+        tokenCode: t.token_code,
+        serialNumber: t.serial_number,
+        status: t.status,
+        institution: {
+          id: t.institutions.id,
+          code: t.institutions.code,
+          name: t.institutions.name,
+          shortName: t.institutions.short_name,
+          logoUrl: t.institutions.logo_url,
+        },
+        purchasedAt: t.purchased_at,
+        expiresAt: t.expires_at,
+        usedAt: t.used_at ?? null,
+      })),
+      count ?? 0,
+      page,
+      limit,
+    );
   }
 
   async validate(userId: string, dto: ValidateTokenDto) {
-    const { data: token, error } = await this.supabase.admin.from('tokens')
-      .select('*, institutions(code, name, short_name)').eq('token_code', dto.tokenCode).eq('serial_number', dto.serialNumber).eq('user_id', userId).maybeSingle();
-    if (error || !token) throw new NotFoundException({ code: 'TOKEN_NOT_FOUND', message: 'Token not found or does not belong to you' });
-    if (token.status === 'USED') throw new BadRequestException({ code: 'TOKEN_USED', message: 'This token has already been used' });
-    if (token.status === 'EXPIRED' || new Date(token.expires_at) < new Date()) {
-      await this.supabase.admin.from('tokens').update({ status: 'EXPIRED' }).eq('id', token.id);
-      throw new BadRequestException({ code: 'TOKEN_EXPIRED', message: 'This token has expired' });
+    const { data: token, error } = await this.supabase.admin
+      .from("tokens")
+      .select("*, institutions(code, name, short_name)")
+      .eq("token_code", dto.tokenCode)
+      .eq("serial_number", dto.serialNumber)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !token)
+      throw new NotFoundException({
+        code: "TOKEN_NOT_FOUND",
+        message: "Token not found or does not belong to you",
+      });
+    if (token.status === "USED")
+      throw new BadRequestException({
+        code: "TOKEN_USED",
+        message: "This token has already been used",
+      });
+    if (token.status === "EXPIRED" || new Date(token.expires_at) < new Date()) {
+      await this.supabase.admin
+        .from("tokens")
+        .update({ status: "EXPIRED" })
+        .eq("id", token.id);
+      throw new BadRequestException({
+        code: "TOKEN_EXPIRED",
+        message: "This token has expired",
+      });
     }
-    await this.supabase.admin.from('tokens').update({ status: 'USED', used_at: new Date().toISOString() }).eq('id', token.id);
-    await this.supabase.admin.from('token_validations').insert({ token_id: token.id, user_id: userId, validated_at: new Date().toISOString(), exam_number: dto.examNumber ?? null });
-    return { valid: true, tokenId: token.id, institution: token.institutions.short_name, message: 'Token validated successfully.' };
+    await this.supabase.admin
+      .from("tokens")
+      .update({ status: "USED", used_at: new Date().toISOString() })
+      .eq("id", token.id);
+    await this.supabase.admin
+      .from("token_validations")
+      .insert({
+        token_id: token.id,
+        user_id: userId,
+        validated_at: new Date().toISOString(),
+        exam_number: dto.examNumber ?? null,
+      });
+    return {
+      valid: true,
+      tokenId: token.id,
+      institution: token.institutions.short_name,
+      message: "Token validated successfully.",
+    };
   }
 
-  // ── Helpers ───────────────────────────────────────────────────
-
-  private async checkVendorBalance(gateway: string, required: number, institutionName: string) {
+  private async checkVendorBalance(
+    gateway: string,
+    required: number,
+    institutionName: string,
+  ) {
     try {
-      let available: number;
-      if (gateway === VTPASS_GATEWAY) {
-        const b = await this.vtpass.checkPrefundBalance();
-        available = b.balance;
-      } else {
-        const b = await this.remita.checkPrefundBalance();
-        available = b.availableBalance;
-      }
+      const available =
+        gateway === VTPASS_GATEWAY
+          ? (await this.vtpass.checkPrefundBalance()).balance
+          : (await this.remita.checkPrefundBalance()).availableBalance;
       if (available !== -1 && available < required) {
-        this.logger.warn(`${gateway} balance ₦${available} < required ₦${required}`);
         throw new ServiceUnavailableException({
-          code: 'SERVICE_TEMPORARILY_UNAVAILABLE',
+          code: "SERVICE_TEMPORARILY_UNAVAILABLE",
           message: `${institutionName} token purchase is temporarily unavailable. Please try again later.`,
         });
       }
     } catch (err: any) {
-      if (err?.status === 503) throw err; // rethrow our own error
-      // Gateway balance check failed — proceed cautiously, don't block user
-      this.logger.warn(`${gateway} balance check failed — proceeding: ${err.message}`);
+      if (err?.status === 503) throw err;
+      this.logger.warn(
+        `${gateway} balance check failed — proceeding: ${err.message}`,
+      );
     }
   }
 
   private async getUserPhone(userId: string): Promise<string> {
-    const { data } = await this.supabase.admin.from('profiles').select('phone').eq('id', userId).single();
-    return data?.phone ?? '08000000000';
+    const { data } = await this.supabase.admin
+      .from("profiles")
+      .select("phone")
+      .eq("id", userId)
+      .single();
+    return data?.phone ?? "08000000000";
   }
 }
