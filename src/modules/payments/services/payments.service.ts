@@ -1,4 +1,3 @@
-import { RevenueService } from '@common/services/revenue.service';
 import { SupabaseService } from '@common/supabase/supabase.service';
 import { WalletService } from '@modules/wallet/wallet.service';
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
