@@ -46,6 +46,8 @@ export class PaymentsService {
     }
 
     const payload = JSON.parse(rawBody.toString());
+    console.log(payload);
+    
     if (payload.event !== 'charge.success') return;
 
     const { reference, amount: amountKobo, status, paid_at, metadata: paystackMeta } = payload.data;
