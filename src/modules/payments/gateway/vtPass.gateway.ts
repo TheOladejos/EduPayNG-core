@@ -1,4 +1,3 @@
-import { BillsService } from "@modules/bills/bills.services";
 import {
   Injectable,
   Logger,
@@ -44,7 +43,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
   constructor(private config: ConfigService) {
     const apiKey = config.getOrThrow("VTPASS_API_KEY");
     const pubKey = config.getOrThrow("VTPASS_PUBLIC_KEY");
-    const baseUrl = config.get("VTPASS_BASE_URL", "https://vtpass.com/api");
+    const baseUrl = config.getOrThrow("VTPASS_BASE_URL");
 
     this.http = axios.create({
       baseURL: baseUrl,

@@ -70,7 +70,7 @@ async function bootstrap() {
       .addTag('Exams',           'CBT exam system')
       .addTag('AI',              'AI course assistant & recommendations')
       .addTag('Payments',        'Payment gateway integration')
-      .addTag('Bills',           'Airtime, Data, Electricity, Cable TV')
+      .addTag('Bills',           'Airtime, Data')
       .addTag('Study Materials', 'Learning resources')
       .addTag('Scholarships',    'Scholarship discovery & applications')
       .addTag('Notifications',   'User notification system')
