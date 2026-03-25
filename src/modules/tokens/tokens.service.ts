@@ -61,6 +61,7 @@ export class TokensService {
   }
 
   async purchase(userId: string, dto: PurchaseTokensDto) {
+    
     const { data: institution } = await this.supabase.admin
       .from("institutions")
       .select("*")
@@ -650,6 +651,9 @@ export class TokensService {
         gateway === VTPASS_GATEWAY
           ? (await this.vtpass.checkPrefundBalance()).balance
           : (await this.remita.checkPrefundBalance()).availableBalance;
+
+          console.log(available);
+          
       if (available !== -1 && available < required) {
         throw new ServiceUnavailableException({
           code: "SERVICE_TEMPORARILY_UNAVAILABLE",

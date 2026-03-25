@@ -7,10 +7,8 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcryptjs';
 import { SupabaseService } from '../../common/supabase/supabase.service';
 import { RegisterDto, LoginDto } from './auth.dto';
-import { generateRef } from '../../common/helpers/generators';
 import { User } from '@supabase/supabase-js';
 
 @Injectable()
@@ -104,7 +102,7 @@ export class AuthService {
       email: dto.email,
       password: dto.password,
     });
-
+    
     if (error || !data.user) {
       throw new UnauthorizedException({ code: 'INVALID_CREDENTIALS', message: 'Incorrect email or password' });
     }

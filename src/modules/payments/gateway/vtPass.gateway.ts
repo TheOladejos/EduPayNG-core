@@ -125,16 +125,17 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     quantity: number;
     reference: string;
     phone: string;
+    variationCode?: string; // e.g. 'utme-mock' or 'utme-no-mock'
+    amountNaira?: number; // optional, only needed if you want to specify a custom amount instead of the default for the variation
     institutionName?: string; // for logging only
   }) {
-    const requestId = this.genRequestId();
+    const requestId = this.genRequestId(); 
 
     const { data } = await this.http.post("/pay", {
       request_id: requestId,
       serviceID: params.serviceId,
-      billersCode: params.phone,
-      variation_code: "prepaid",
-      amount: 0, // amount is fixed by VTPass for tokens
+      variation_code: params.variationCode, // use cached variation code if available, otherwise fallback to provided one
+      amount: params.amountNaira,  // amount is fixed by VTPass for tokens/ default price
       phone: params.phone,
       quantity: params.quantity,
     });
