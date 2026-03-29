@@ -18,6 +18,7 @@ import { ReferralsModule } from './modules/referrals/referrals.module';
 import { SupabaseModule } from './common/supabase/supabase.module';
 import { BillsModule } from '@modules/bills/bills.modules';
 import { GatewayModule } from '@modules/payments/gateway/gateway.module';
+import { AdminModule } from '@modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { GatewayModule } from '@modules/payments/gateway/gateway.module';
 
     // Feature modules
     AuthModule,
+    AdminModule,
     UsersModule,
     WalletModule,
     TokensModule,

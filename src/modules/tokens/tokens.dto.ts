@@ -48,11 +48,6 @@ export class PurchaseTokensDto {
   @ValidateIf(o => o.paymentMethod === TokenPaymentMethod.HYBRID)
   @IsNumber() @Min(1)
   cardAmount?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  callbackUrl?: string;
 }
 
 export class ValidateTokenDto {

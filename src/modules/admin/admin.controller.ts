@@ -30,8 +30,8 @@ import {
 import { RemitaService } from "@modules/payments/gateway/remita.gateway";
 import { VtpassService } from "@modules/payments/gateway/vtPass.gateway";
 
-const REMITA_MIN_BALANCE = 10_000;
-const VTPASS_MIN_BALANCE = 5_000;
+const REMITA_MIN_BALANCE = 10000;
+const VTPASS_MIN_BALANCE = 5000;
 
 class RevenueQueryDto {
   @ApiPropertyOptional() @IsOptional() @IsString() from?: string;

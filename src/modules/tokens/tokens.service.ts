@@ -42,7 +42,8 @@ export class TokensService {
     const { data, error } = await this.supabase.admin
       .from("institutions")
       .select(
-        "id, code, name, short_name, token_price, logo_url, description, gateway",
+        "id,code, name, token_price, logo_url, description"
+        // "id, code, name, short_name, token_price, logo_url, description, gateway",
       )
       .eq("is_active", true)
       .order("display_order");
@@ -50,13 +51,13 @@ export class TokensService {
     if (error) throw new InternalServerErrorException(error.message);
     return (data ?? []).map((i) => ({
       id: i.id,
-      code: i.code,
+      // code: i.code,
       name: i.name,
-      shortName: i.short_name,
+      shortName: i.code,
       tokenPrice: i.token_price,
       logoUrl: i.logo_url,
       description: i.description,
-      gateway: i.gateway,
+      // gateway: i.gateway,
     }));
   }
 
@@ -78,6 +79,7 @@ export class TokensService {
       institution.code === "WAEC" || institution.code === "JAMB"
         ? VTPASS_GATEWAY
         : REMITA_GATEWAY;
+    const vendorCost  = (institution.vendor_cost ?? 0) * dto.quantity;
     const totalAmount = institution.token_price * dto.quantity;
     const reference = generateRef("TP");
 
@@ -88,14 +90,14 @@ export class TokensService {
     if (dto.paymentMethod === TokenPaymentMethod.WALLET) {
       await this.checkVendorBalance(
         gateway,
-        totalAmount,
-        institution.short_name,
+        vendorCost,
+        institution.code,
       );
 
       const walletSnapshot = await this.wallet.debitWallet(
         userId,
         totalAmount,
-        `${institution.short_name} Token x${dto.quantity}`,
+        `${institution.code} Token x${dto.quantity}`,
       );
 
       const { data: txn } = await this.supabase.admin
@@ -123,6 +125,7 @@ export class TokensService {
         txnId: txn!.id,
         reference,
         gateway,
+        vendorCost,
         institution,
         quantity: dto.quantity,
         deliveryMethod: dto.deliveryMethod,
@@ -137,7 +140,7 @@ export class TokensService {
     // User has some balance but not enough — top up the difference
     // ═══════════════════════════════════════════════════════════
     if (dto.paymentMethod === TokenPaymentMethod.HYBRID) {
-      const walletAmount = dto.walletAmount!;
+      const walletAmount = dto.walletAmount!; 
       const cardAmount = dto.cardAmount!;
 
       // Validate amounts add up
@@ -167,7 +170,7 @@ export class TokensService {
       await this.checkVendorBalance(
         gateway,
         totalAmount,
-        institution.short_name,
+        institution.code,
       );
 
       // Fetch user email for Paystack
@@ -246,8 +249,7 @@ export class TokensService {
         email,
         amountNaira: cardAmount,
         reference: paystackRef,
-        callbackUrl:
-          dto.callbackUrl ?? `${this.config.get("APP_URL")}/tokens/callback`,
+        callbackUrl: `${this.config.get("APP_URL")}/tokens/callback`,
         metadata: {
           userId,
           type: "HYBRID_TOKEN_PURCHASE",
@@ -282,7 +284,7 @@ export class TokensService {
         walletAmount,
         cardAmount,
         totalAmount,
-        institution: institution.short_name,
+        institution: institution.code,
         message: `₦${walletAmount.toLocaleString()} reserved from wallet. Please complete ₦${cardAmount.toLocaleString()} via Paystack.`,
       };
     }
@@ -326,8 +328,7 @@ export class TokensService {
       email,
       amountNaira: totalAmount,
       reference,
-      callbackUrl:
-        dto.callbackUrl ?? `${this.config.get("APP_URL")}/tokens/callback`,
+      callbackUrl: `${this.config.get("APP_URL")}/tokens/callback`,
       metadata: {
         userId,
         type: "TOKEN_PURCHASE",
@@ -347,7 +348,7 @@ export class TokensService {
       amount: totalAmount,
       quantity: dto.quantity,
       gateway: "PAYSTACK",
-      institution: institution.short_name,
+      institution: institution.code,
     };
   }
 
@@ -362,6 +363,7 @@ export class TokensService {
     quantity: number;
     deliveryMethod: string;
     totalAmount: number;
+    vendorCost: number;
     walletSnapshot?: any;
     paymentSource: "WALLET" | "PAYSTACK" | "HYBRID";
   }) {
@@ -374,12 +376,12 @@ export class TokensService {
       quantity,
       deliveryMethod,
       totalAmount,
+      vendorCost,
       walletSnapshot,
       paymentSource,
     } = params;
 
     let purchasedTokens: any;
-    let vendorCost;
 
     try {
       if (gateway === VTPASS_GATEWAY) {
@@ -388,7 +390,10 @@ export class TokensService {
           serviceId: institution.code.toLowerCase(),
           quantity,
           reference,
-          phone: userPhone,
+          phone: userPhone, 
+          amountName: institution.vendor_cost,
+          variationCode: institution.vtpass_code,
+          institutionName: institution.name
         });
       } else {
         purchasedTokens = await this.remita.purchaseToken({
@@ -407,7 +412,7 @@ export class TokensService {
         await this.wallet.creditWallet(
           userId,
           totalAmount,
-          `Refund: ${institution.short_name} token purchase failed`,
+          `Refund: ${institution.code} token purchase failed`,
         );
       }
       // For PAYSTACK and HYBRID: the Paystack amount is non-refundable automatically.
@@ -420,7 +425,7 @@ export class TokensService {
       await this.wallet.sendNotification(
         userId,
         "❌ Token Purchase Failed",
-        `${institution.short_name} token purchase failed. ${paymentSource === "WALLET" ? `₦${totalAmount.toLocaleString()} has been refunded to your wallet.` : "Please contact support with reference: " + reference}`,
+        `${institution.code} token purchase failed. ${paymentSource === "WALLET" ? `₦${totalAmount.toLocaleString()} has been refunded to your wallet.` : "Please contact support with reference: " + reference}`,
         "ERROR",
         "TRANSACTION",
       );
@@ -428,15 +433,11 @@ export class TokensService {
       if (paymentSource === "WALLET") {
         throw new ServiceUnavailableException({
           code: "TOKEN_PURCHASE_FAILED",
-          message: `Failed to purchase ${institution.short_name} token. Wallet has been refunded.`,
+          message: `Failed to purchase ${institution.code} token. Wallet has been refunded.`,
         });
       }
       return; // For card payments, don't throw — just log and notify
     }
-
-    vendorCost =
-      (totalAmount - totalAmount * (purchasedTokens.commission_rate / 100)) *
-      quantity; // for revenue recording — this is the cost we pay to gateway
 
     const tokenDetails = {
       user_id: userId,
@@ -516,7 +517,7 @@ export class TokensService {
     await this.wallet.sendNotification(
       userId,
       "🎫 Token Purchase Successful",
-      `Your ${quantity} ${institution.short_name} token(s) are ready. Check your email/SMS.`,
+      `Your ${quantity} ${institution.code} - ${institution.short_name} token(s) are ready. Check your email/SMS.`,
       "SUCCESS",
       "TRANSACTION",
     );
@@ -531,9 +532,8 @@ export class TokensService {
       tokens: (tokens ?? []).map((t) => ({
         id: t.id,
         tokenCode: t.token_code,
-        serialNumber: t.serial_number,
-        institution: institution.short_name,
-        expiresAt: t.expires_at,
+        institution: institution.code,
+        ...(t.serial_number ? {serialNumber: t.serial_number}:{})
       })),
       ...(walletSnapshot
         ? {
