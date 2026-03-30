@@ -335,6 +335,7 @@ export class TokensService {
         institutionId: dto.institutionId,
         institutionCode: institution.code,
         gateway,
+        vendorCost,
         quantity: dto.quantity,
         deliveryMethod: dto.deliveryMethod,
       },

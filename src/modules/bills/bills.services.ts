@@ -51,7 +51,14 @@ export class BillsService implements OnModuleDestroy {
     // If categoryCode is provided, filter billers by category; otherwise return all billers
     const q = await this.getAndSetBillerCache(); // Preload biller cache on start
     if (categoryCode) return q.filter((b) => b.category_code === categoryCode);
-    return q ?? [];
+
+    return (q ?? []).map((e) =>({
+      id: e.id,
+      name: e.name,
+      shortName: e.short_name,
+      logoUrl: e.logo_url,
+      categoryCode
+    }));
   }
 
   async getProducts(billerId: string) {
