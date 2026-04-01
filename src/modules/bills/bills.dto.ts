@@ -26,10 +26,6 @@ export class BuyAirtimeDto {
   @Min(50, { message: 'Minimum airtime is ₦50' })
   @Max(50000)
   amount: number;
-
-  @ApiProperty({ enum: BillPaymentMethod, default: 'WALLET' })
-  @IsEnum(BillPaymentMethod)
-  paymentMethod: BillPaymentMethod;
 }
 
 // ── Data Bundle ───────────────────────────────────────────────
@@ -56,8 +52,4 @@ export class BuyDataDto {
   @ApiProperty({ description: 'Product Amount' })
   @IsNumber()
   amount: number;
-
-  @ApiProperty({ enum: BillPaymentMethod, default: 'WALLET' })
-  @IsEnum(BillPaymentMethod)
-  paymentMethod: BillPaymentMethod;
 }
