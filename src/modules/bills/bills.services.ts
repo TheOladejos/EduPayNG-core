@@ -19,6 +19,7 @@ import { categorizeData } from "@common/helpers/helpers";
 export class BillsService implements OnModuleDestroy {
   private readonly logger = new Logger(BillsService.name);
   private readonly billersCache = new Map<string, any>(); // Cache biller details to avoid repeated DB calls during purchase flow
+  private readonly productCache = new Map<string, any>(); // Cache biller details to avoid repeated DB calls during purchase flow
 
   constructor(
     private supabase: SupabaseService,
@@ -28,6 +29,7 @@ export class BillsService implements OnModuleDestroy {
   ) {}
   onModuleDestroy() {
     this.billersCache.clear();
+    this.productCache.clear()
   }
 
   // ── Catalog endpoints (public) ────────────────────────────────
@@ -50,7 +52,17 @@ export class BillsService implements OnModuleDestroy {
   async getBillers(categoryCode?: string) {
     // If categoryCode is provided, filter billers by category; otherwise return all billers
     const q = await this.getAndSetBillerCache(); // Preload biller cache on start
-    if (categoryCode) return q.filter((b) => b.category_code === categoryCode);
+
+    if (categoryCode){
+    const data =  q.filter((b) => b.category_code === categoryCode);
+    return (data ?? []).map((e) =>({
+      id: e.id,
+      name: e.name,
+      shortName: e.short_name,
+      logoUrl: e.logo_url,
+      categoryCode
+    }))
+    };
 
     return (q ?? []).map((e) =>({
       id: e.id,
@@ -62,17 +74,9 @@ export class BillsService implements OnModuleDestroy {
   }
 
   async getProducts(billerId: string) {
-    const biller = await this.getBillerOrThrow(billerId);
-
-    const data = await this.vtpass.getVariations(biller.vtpass_code);
-    if (!data)
-      throw new NotFoundException({
-        code: "PRODUCT_NOT_FOUND",
-        message: "Bill product not found",
-      });
-
+    const product = await this.getAndSetProductCache(billerId)
     // sorting by daily, weekly, monthly etc. variations to get the most expensive one (usually the first one) for accurate billing
-    return categorizeData(data);
+    return categorizeData(product);
   }
 
   // ── Purchase: Airtime ─────────────────────────────────────────
@@ -169,19 +173,21 @@ export class BillsService implements OnModuleDestroy {
 
   async buyData(userId: string, dto: BuyDataDto) {
     const biller = await this.getBillerOrThrow(dto.billerId, "DATA");
+    const product = await this.getProductOrThrow(biller.id, dto.productId)
+
     const reference = generateRef("DAT");
 
     const walletSnapshot = await this.wallet.debitWallet(
       userId,
-      dto.amount,
-      `${biller.name}: ${dto.productId} → ${dto.phone}`,
+      product.amount,
+      `${biller.name}: ${product.name} → ${dto.phone}`,
     );
 
     const txn = await this.createTransaction(
       userId,
       reference,
       "BILL_DATA",
-      dto.amount,
+      product.amount,
     );
     const billTxn = await this.createBillTransaction({
       userId,
@@ -189,17 +195,17 @@ export class BillsService implements OnModuleDestroy {
       billerId: dto.billerId,
       categoryCode: "DATA",
       customerPhone: dto.phone,
-      amount: dto.amount,
-      productCode: dto.productId,
-      productName: dto.productName,
+      amount: product.amount,
+      productCode: product.vtpass_code,
+      productName: product.name,
     });
 
     try {
       const result = await this.vtpass.buyData({
         serviceId: biller.vtpass_code,
         phone: dto.phone,
-        variationCode: dto.productId,
-        amountNaira: dto.amount,
+        variationCode: product.vtpass_code,
+        amountNaira: product.amount,
       });
 
       if (result.status === "delivered") {
@@ -208,13 +214,13 @@ export class BillsService implements OnModuleDestroy {
           txn.id,
           billTxn.id,
           result,
-          dto.amount,
+          product.amount,
           "DATA",
         );
         await this.wallet.sendNotification(
           userId,
           "✅ Data Activated",
-          `${dto.productName} activated on ${dto.phone} via ${biller.short_name}`,
+          `${product.name} activated on ${dto.phone} via ${biller.short_name}`,
           "SUCCESS",
           "BILL",
         );
@@ -222,8 +228,8 @@ export class BillsService implements OnModuleDestroy {
           status: "SUCCESS",
           reference,
           phone: dto.phone,
-          product: dto.productName,
-          amount: dto.amount,
+          product: product.name,
+          amount: product.amount,
           walletSnapshot,
         };
       }
@@ -232,7 +238,7 @@ export class BillsService implements OnModuleDestroy {
         userId,
         txn.id,
         billTxn.id,
-        dto.amount,
+       product.amount,
         dto.phone,
       );
       throw new BadRequestException({
@@ -245,7 +251,7 @@ export class BillsService implements OnModuleDestroy {
           userId,
           txn.id,
           billTxn.id,
-          dto.amount,
+          product.amount,
           `${biller.short_name} Data failed`,
         );
       }
@@ -303,11 +309,42 @@ export class BillsService implements OnModuleDestroy {
     this.billersCache.set("all", data); // Cache all billers for quick access during purchase flow
     return data;
   }
+  private async getAndSetProductCache(billerId:string) {
+    const cached = this.productCache.get("all");
+    if (cached) return cached;
 
-  private async getBillerOrThrow(billerId: string, expectedCategory?: string) {
+    const { data, error } = await this.supabase.admin
+      .from("bill_products")
+      .select(
+        "id, vtpass_code, name, description, amount, validity",
+      )
+      .eq("biller_id", billerId)
+      .eq("is_active", true)
+
+    if (error || !data) {
+      throw new InternalServerErrorException(
+        "Failed to load biller configuration",
+      );
+    }
+    this.productCache.set("all", data); // Cache all billers for quick access during purchase flow
+    return data;
+  }
+
+  private async getProductOrThrow(billerId:string, productId:string){
+     const q = await this.getAndSetProductCache(billerId); // Ensure cache is loaded
+     const data = q.find((p)=> p.id === productId)
+      if (!data)
+      throw new NotFoundException({
+        code: "PRODUCT_NOT_FOUND",
+        message: "Data Bundle not found or inactive",
+      });
+return data
+  }
+
+  private async getBillerOrThrow(billersId: string, expectedCategory?: string) {
     const q = await this.getAndSetBillerCache(); // Ensure cache is loaded
 
-    const biller = q.find((b) => b.id === billerId);
+    const biller = q.find((b) => b.id === billersId);
 
     if (!biller)
       throw new NotFoundException({

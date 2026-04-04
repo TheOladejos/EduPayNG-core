@@ -35,21 +35,23 @@ export class BuyDataDto {
  @IsUUID()
   billerId: string;
 
+    @ApiProperty({ description: 'Product id' })
+  @IsString()
+  productId: string;
+
   @ApiProperty({ example: '08012345678' })
   @IsString()
   @Matches(/^0[7-9][01]\d{8}$/, { message: 'Invalid Nigerian phone number' })
   phone: string;
 
-  @ApiProperty({ description: 'Product Variation Code' })
-  @IsString()
-  productId: string;
 
-  @ApiProperty({ description: 'Product Name' })
-  @IsString()
-  @Optional()
-  productName: string;
 
-  @ApiProperty({ description: 'Product Amount' })
-  @IsNumber()
-  amount: number;
+  // @ApiProperty({ description: 'Product Name' })
+  // @IsString()
+  // @Optional()
+  // productName: string;
+
+  // @ApiProperty({ description: 'Product Amount' })
+  // @IsNumber()
+  // amount: number;
 }
