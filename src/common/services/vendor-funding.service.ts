@@ -45,26 +45,31 @@ export class VendorFundingService {
   // Also logs to vendor_balance_log for history.
 
   async checkLiveBalances() {
-    const [thresholds, remitaBal, vtpassBal] = await Promise.all([
+    const [
+      thresholds, 
+      vtpassBal,
+      // remitaBal
+    ] = await Promise.all([
       this.getThresholds(),
-      this.remita.checkPrefundBalance(),
       this.vtpass.checkPrefundBalance(),
+      // this.remita.checkPrefundBalance(),
+    
     ]);
 
     const remitaThreshold = thresholds.REMITA ?? { min_balance: 50000, critical_balance: 10000 };
     const vtpassThreshold = thresholds.VTPASS ?? { min_balance: 30000, critical_balance: 5000 };
 
-    const remitaStatus = this.classifyBalance(remitaBal.availableBalance, remitaThreshold);
+    // const remitaStatus = this.classifyBalance(remitaBal.availableBalance, remitaThreshold);
     const vtpassStatus = this.classifyBalance(vtpassBal.balance, vtpassThreshold);
 
     // Log both for history
     await this.supabase.admin.from('vendor_balance_log').insert([
-      {
-        vendor:     'REMITA',
-        balance:    remitaBal.availableBalance,
-        is_low:     remitaStatus !== 'OK',
-        threshold:  remitaThreshold.min_balance,
-      },
+      // {
+      //   vendor:     'REMITA',
+      //   balance:    remitaBal.availableBalance,
+      //   is_low:     remitaStatus !== 'OK',
+      //   threshold:  remitaThreshold.min_balance,
+      // },
       {
         vendor:     'VTPASS',
         balance:    vtpassBal.balance,
@@ -80,23 +85,25 @@ export class VendorFundingService {
     ]);
 
     // Project runway based on recent spend rate
-    const [remitaProjection, vtpassProjection] = await Promise.all([
-      this.projectRunway('REMITA', remitaBal.availableBalance),
+    const [
+      // remitaProjection, 
+      vtpassProjection] = await Promise.all([
+      // this.projectRunway('REMITA', remitaBal.availableBalance),
       this.projectRunway('VTPASS', vtpassBal.balance),
     ]);
 
     return {
-      remita: {
-        availableBalance:  remitaBal.availableBalance,
-        currency:          'NGN',
-        status:            remitaStatus,
-        alertLevel:        this.toAlertLevel(remitaStatus),
-        thresholds:        remitaThreshold,
-        lastTopup:         lastRemitaTopup,
-        projectedRunway:   remitaProjection,
-        usedFor:           'Token purchases — NECO, NABTEB',
-        howToTopUp:        'See GET /admin/vendor-funding/bank-accounts for transfer details',
-      },
+      // remita: {
+      //   availableBalance:  remitaBal.availableBalance,
+      //   currency:          'NGN',
+      //   status:            remitaStatus,
+      //   alertLevel:        this.toAlertLevel(remitaStatus),
+      //   thresholds:        remitaThreshold,
+      //   lastTopup:         lastRemitaTopup,
+      //   projectedRunway:   remitaProjection,
+      //   usedFor:           'Token purchases — NECO, NABTEB',
+      //   howToTopUp:        'See GET /admin/vendor-funding/bank-accounts for transfer details',
+      // },
       vtpass: {
         availableBalance:  vtpassBal.balance,
         currency:          'NGN',
@@ -122,13 +129,13 @@ export class VendorFundingService {
     // Capture current vendor balance for before-snapshot
     let balanceBefore: number | null = null;
     try {
-      if (dto.vendor === 'REMITA') {
-        const b = await this.remita.checkPrefundBalance();
-        balanceBefore = b.availableBalance;
-      } else {
+      // if (dto.vendor === 'REMITA') {
+      //   const b = await this.remita.checkPrefundBalance();
+      //   balanceBefore = b.availableBalance;
+      // } else {
         const b = await this.vtpass.checkPrefundBalance();
         balanceBefore = b.balance;
-      }
+      // }
     } catch { /* non-fatal — proceed without snapshot */ }
 
     const { data, error } = await this.supabase.admin
@@ -179,13 +186,13 @@ export class VendorFundingService {
     // Verify live balance matches expected
     let liveBalance: number;
     try {
-      if (topup.vendor === 'REMITA') {
-        const b = await this.remita.checkPrefundBalance();
-        liveBalance = b.availableBalance;
-      } else {
+      // if (topup.vendor === 'REMITA') {
+      //   const b = await this.remita.checkPrefundBalance();
+      //   liveBalance = b.availableBalance;
+      // } else {
         const b = await this.vtpass.checkPrefundBalance();
         liveBalance = b.balance;
-      }
+      // }
     } catch {
       liveBalance = dto.balanceAfter; // fall back to manually provided value
     }
@@ -258,15 +265,17 @@ export class VendorFundingService {
   // Call this every 30 minutes from a cron job or Supabase Edge Function.
   // Returns alert objects if either balance is critical.
 
-  async scheduledCheck(): Promise<{ alerts: string[]; remitaBalance: number; vtpassBalance: number }> {
+  async scheduledCheck(): Promise<{ alerts: string[]; 
+    // remitaBalance: number; 
+    vtpassBalance: number }> {
     const data = await this.checkLiveBalances();
     const alerts: string[] = [];
 
-    if (data.remita.alertLevel === 'CRITICAL') {
-      alerts.push(`🚨 CRITICAL: Remita prefund at ₦${data.remita.availableBalance.toLocaleString()}. Token purchases will fail. Top up immediately.`);
-    } else if (data.remita.alertLevel === 'LOW') {
-      alerts.push(`⚠️ LOW: Remita prefund at ₦${data.remita.availableBalance.toLocaleString()}. Top up soon.`);
-    }
+    // if (data.remita.alertLevel === 'CRITICAL') {
+    //   alerts.push(`🚨 CRITICAL: Remita prefund at ₦${data.remita.availableBalance.toLocaleString()}. Token purchases will fail. Top up immediately.`);
+    // } else if (data.remita.alertLevel === 'LOW') {
+    //   alerts.push(`⚠️ LOW: Remita prefund at ₦${data.remita.availableBalance.toLocaleString()}. Top up soon.`);
+    // }
 
     if (data.vtpass.alertLevel === 'CRITICAL') {
       alerts.push(`🚨 CRITICAL: VTPass prefund at ₦${data.vtpass.availableBalance.toLocaleString()}. Bill payments will fail. Top up immediately.`);
@@ -282,7 +291,7 @@ export class VendorFundingService {
 
     return {
       alerts,
-      remitaBalance: data.remita.availableBalance,
+      // remitaBalance: data.remita.availableBalance,
       vtpassBalance: data.vtpass.availableBalance,
     };
   }

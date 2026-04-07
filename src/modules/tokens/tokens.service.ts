@@ -648,12 +648,12 @@ export class TokensService {
     institutionName: string,
   ) {
     try {
-      const available =
-        gateway === VTPASS_GATEWAY
-          ? (await this.vtpass.checkPrefundBalance()).balance
-          : (await this.remita.checkPrefundBalance()).availableBalance;
+      const available = (await this.vtpass.checkPrefundBalance()).balance
+        // gateway === VTPASS_GATEWAY
+        //   ? (await this.vtpass.checkPrefundBalance()).balance
+        //   : (await this.remita.checkPrefundBalance()).availableBalance;
 
-          console.log(available);
+     this.logger.log(available)
           
       if (available !== -1 && available < required) {
         throw new ServiceUnavailableException({

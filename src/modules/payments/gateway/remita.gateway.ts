@@ -152,26 +152,27 @@ export class RemitaService {
   // Call this from a scheduled job or admin endpoint.
   // Alert when balance falls below your threshold.
 
-  async checkPrefundBalance(): Promise<RemitaPrefundBalance> {
-    try {
-      const hash = crypto
-        .createHash('sha512')
-        .update(`${this.merchantId}${this.apiKey}`)
-        .digest('hex');
+  // async checkPrefundBalance(): Promise<RemitaPrefundBalance> {
+  // async checkPrefundBalance(){
+  //   try {
+  //     const hash = crypto
+  //       .createHash('sha512')
+  //       .update(`${this.merchantId}${this.apiKey}`)
+  //       .digest('hex');
 
-      const { data } = await this.http.get(
-        `/remita/exapp/api/v1/send/api/echannelsvc/echannel/balance?merchantId=${this.merchantId}&hash=${hash}`,
-      );
+  //     const { data } = await this.http.get(
+  //       `/remita/exapp/api/v1/send/api/echannelsvc/echannel/balance?merchantId=${this.merchantId}&hash=${hash}`,
+  //     );
 
-      return {
-        availableBalance: Number(data.availableBalance ?? data.balance ?? 0),
-        currency:         data.currency ?? 'NGN',
-      };
-    } catch (err) {
-      this.logger.error('Remita balance check failed', err);
-      return { availableBalance: -1, currency: 'NGN' };
-    }
-  }
+  //     return {
+  //       availableBalance: Number(data.availableBalance ?? data.balance ?? 0),
+  //       currency:         data.currency ?? 'NGN',
+  //     };
+  //   } catch (err) {
+  //     this.logger.error('Remita balance check failed', err);
+  //     return { availableBalance: -1, currency: 'NGN' };
+  //   }
+  // }
 
   // ── Verify webhook signature ──────────────────────────────────
 

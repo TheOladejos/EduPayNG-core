@@ -1,3 +1,4 @@
+
 export const categorizeData = (items) => {
   return items.reduce((acc, item) => {
     const name = item.name.toLowerCase();
@@ -24,3 +25,15 @@ export const categorizeData = (items) => {
     return acc;
   }, { daily: [], weekly: [], monthly: [], others: [] });
 };
+
+export const genRequestId = async() => {
+
+  const { v4: uuid } = await import("uuid");
+    // VTPass requires: datetime prefix + unique suffix, max 45 chars
+    const ts = new Date()
+      .toISOString()
+      .replace(/[-T:.Z]/g, "")
+      .substring(0, 14);
+    const uid = uuid().replace(/-/g, "").substring(0, 10).toUpperCase();
+    return `${ts}${uid}`;
+  }

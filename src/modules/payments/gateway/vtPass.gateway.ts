@@ -1,3 +1,4 @@
+import { genRequestId } from "@common/helpers/helpers";
 import {
   Injectable,
   Logger,
@@ -7,8 +8,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
-import { log } from "console";
-import { v4 as uuid } from "uuid";
+
 
 export interface VtpassBillResult {
   reference: string;
@@ -39,22 +39,49 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     { data: any[]; timestamp: number }
   >();
   private readonly CACHE_TTL = 3600 * 1000;
-  private cleanupInterval: NodeJS.Timeout;
+  private cleanupInterval!: NodeJS.Timeout;
 
   constructor(private config: ConfigService) {
     const apiKey = config.getOrThrow("VTPASS_API_KEY");
     const pubKey = config.getOrThrow("VTPASS_PUBLIC_KEY");
+    const secretKey = config.getOrThrow("VTPASS_SECRET_KEY");
     const baseUrl = config.getOrThrow("VTPASS_BASE_URL");
 
-    this.http = axios.create({
-      baseURL: baseUrl,
-      headers: {
-        "api-key": apiKey,
-        "public-key": pubKey,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000, // Bills can be slow — 30s
-    });
+   // 1. Initial configuration with neutral headers
+this.http = axios.create({
+  baseURL: baseUrl,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 30000,
+});
+
+// 2. Add a request interceptor
+this.http.interceptors.request.use((config:any) => {
+  const method = config.method.toLowerCase();
+  config.headers['Authorization'] = `Bearer ${pubKey}`;
+
+  if (method === 'get') {
+    // Apply Public Key for GET requests
+    config.headers['public-key'] = pubKey;
+    config.headers['api-key'] = apiKey; // Some endpoints might require the API key in the header for authentication
+    
+    // Ensure the secret key isn't sent if previously set
+    // delete config.headers['api-key']; 
+    
+  } else if (method === 'post') {
+    // Apply Secret Key (api-key) for POST requests
+    config.headers['secret-key'] = secretKey;
+    config.headers['api-key'] = apiKey; // Some endpoints might require the API key in the header for authentication
+    
+    // Ensure the public key isn't sent
+    delete config.headers['public-key'];
+  }
+
+  return config;
+}, (error) => {
+  return Promise.reject(error);
+});
   }
 
   onModuleDestroy() {
@@ -131,7 +158,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     amountName: number;
     variationCode:string;
   }) {
-    const requestId = this.genRequestId(); 
+    const requestId = await genRequestId(); 
 
     const { data } = await this.http.post("/pay", {
       request_id: requestId,
@@ -142,7 +169,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
       quantity: params.quantity,
     });
 
-    const result = this.parseBillResult(
+    const result = this.parseTokenResult(
       requestId,
       data,
       params.institutionName,
@@ -204,7 +231,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     phone: string;
     amountNaira: number;
   }): Promise<VtpassBillResult> {
-    const requestId = this.genRequestId();
+    const requestId = await genRequestId();
     const payload = {
       request_id: requestId,
       serviceID: params.serviceId,
@@ -224,7 +251,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     variationCode: string; // specific bundle code from getVariations()
     amountNaira: number;
   }): Promise<VtpassBillResult> {
-    const requestId = this.genRequestId();
+    const requestId = await genRequestId();
     const { data } = await this.http.post("/pay", {
       request_id: requestId,
       serviceID: params.serviceId,
@@ -248,7 +275,10 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
 
   // ── Internal helpers ──────────────────────────────────────────
 
-  private parseBillResult(
+  private parseBillResult(requestId: string, data: any) {
+   
+  }
+  private parseTokenResult(
     requestId: string,
     data: any,
     institutionName?: string,
@@ -261,7 +291,6 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     const isFailed = ["099", "failed"].includes(String(code));
 
     return {
-      // requestId,
       reference: data.requestId ?? requestId,
       status: isDelivered ? "delivered" : isFailed ? "failed" : "pending",
       productName: txnData.product_name ?? "",
@@ -342,13 +371,5 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private genRequestId(): string {
-    // VTPass requires: datetime prefix + unique suffix, max 45 chars
-    const ts = new Date()
-      .toISOString()
-      .replace(/[-T:.Z]/g, "")
-      .substring(0, 14);
-    const uid = uuid().replace(/-/g, "").substring(0, 10).toUpperCase();
-    return `${ts}${uid}`;
-  }
+  
 }

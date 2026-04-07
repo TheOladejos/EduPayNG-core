@@ -13,7 +13,7 @@ import { paginate, PaginationDto } from "../../common/dto/pagination.dto";
 import { generateRef } from "../../common/helpers/generators";
 import { BuyAirtimeDto, BuyDataDto } from "./bills.dto";
 import { VtpassService } from "@modules/payments/gateway/vtPass.gateway";
-import { categorizeData } from "@common/helpers/helpers";
+import { categorizeData, genRequestId } from "@common/helpers/helpers";
 import { log } from "console";
 
 @Injectable()
@@ -85,6 +85,7 @@ export class BillsService implements OnModuleDestroy {
   async buyAirtime(userId: string, dto: BuyAirtimeDto) {
     const biller = await this.getBillerOrThrow(dto.billerId, "AIRTIME");
     const reference = generateRef("AIR");
+    const requestId = await genRequestId();
 
     // 1. Debit wallet — throws if insufficient balance
     const walletSnapshot = await this.wallet.debitWallet(
@@ -107,6 +108,8 @@ export class BillsService implements OnModuleDestroy {
       categoryCode: "AIRTIME",
       customerPhone: dto.phone,
       amount: dto.amount,
+      reference,
+      requestId,
     });
 
     // 3. Call VTPass — synchronous
@@ -176,7 +179,7 @@ export class BillsService implements OnModuleDestroy {
   async buyData(userId: string, dto: BuyDataDto) {
     const biller = await this.getBillerOrThrow(dto.billerId, "DATA");
     const product = await this.getProductOrThrow(biller.id, dto.productId)
-
+    const requestId = await genRequestId();
     const reference = generateRef("DAT");
 
     const walletSnapshot = await this.wallet.debitWallet(
@@ -200,6 +203,8 @@ export class BillsService implements OnModuleDestroy {
       amount: product.amount,
       productCode: product.vtpass_code,
       productName: product.name,
+      reference,
+      requestId,
     });
 
     try {
@@ -391,6 +396,8 @@ return data
     billerId: string;
     categoryCode: string;
     amount: number;
+    reference: string;
+    requestId: string;
     customerPhone?: string;
     productCode?: string;
     productName?: string;
@@ -402,10 +409,10 @@ return data
         transaction_id: params.transactionId,
         biller_id: params.billerId,
         category_code: params.categoryCode,
-        customer_phone: params.customerPhone ?? null,
         amount: params.amount,
-        product_code: params.productCode ?? null,
-        product_name: params.productName ?? null,
+        customer_phone: params.customerPhone ?? null,
+        vtpass_request_id: params.requestId,
+        ref: params.reference,
         status: "PENDING",
       })
       .select()

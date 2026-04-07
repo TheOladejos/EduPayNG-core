@@ -145,18 +145,20 @@ export class AdminController {
   @Get("vendor-balances")
   @ApiOperation({ summary: "Live Remita + VTPass prefund balances" })
   async getVendorBalances() {
-    const [remitaBal, vtpassBal] = await Promise.all([
-      this.remita.checkPrefundBalance(),
+    const [
+      // remitaBal, 
+      vtpassBal] = await Promise.all([
+      // this.remita.checkPrefundBalance(),
       this.vtpass.checkPrefundBalance(),
     ]);
 
     await this.supabase.admin.from("vendor_balance_log").insert([
-      {
-        vendor: "REMITA",
-        balance: remitaBal.availableBalance,
-        is_low: remitaBal.availableBalance < REMITA_MIN_BALANCE,
-        threshold: REMITA_MIN_BALANCE,
-      },
+      // {
+      //   vendor: "REMITA",
+      //   balance: remitaBal.availableBalance,
+      //   is_low: remitaBal.availableBalance < REMITA_MIN_BALANCE,
+      //   threshold: REMITA_MIN_BALANCE,
+      // },
       {
         vendor: "VTPASS",
         balance: vtpassBal.balance,
@@ -166,13 +168,13 @@ export class AdminController {
     ]);
 
     return {
-      remita: {
-        availableBalance: remitaBal.availableBalance,
-        isLow: remitaBal.availableBalance < REMITA_MIN_BALANCE,
-        status:
-          remitaBal.availableBalance < REMITA_MIN_BALANCE ? "⚠️ LOW" : "✅ OK",
-        usedFor: "NECO, NABTEB tokens",
-      },
+      // remita: {
+      //   availableBalance: remitaBal.availableBalance,
+      //   isLow: remitaBal.availableBalance < REMITA_MIN_BALANCE,
+      //   status:
+      //     remitaBal.availableBalance < REMITA_MIN_BALANCE ? "⚠️ LOW" : "✅ OK",
+      //   usedFor: "NECO, NABTEB tokens",
+      // },
       vtpass: {
         availableBalance: vtpassBal.balance,
         isLow: vtpassBal.balance < VTPASS_MIN_BALANCE,
