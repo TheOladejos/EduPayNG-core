@@ -126,6 +126,33 @@ export class AuthService {
       session: tokens,
     };
   }
+  async loginAdmin(dto: LoginDto) {
+
+    const { data: profile, error }  = await this.supabase.admin
+      .from('admin_users')
+      .select('id, email, role, full_name')
+      .eq('email', dto.email)
+      .single();
+
+        if (!profile || error) {
+      throw new UnauthorizedException({ code: 'INVALID_CREDENTIALS', message: 'Incorrect email or password' });
+    }
+
+    const tokens = this.signTokens(profile.id, profile.email);
+
+    return {
+      user: {
+        id: profile.id,
+        email: profile.email,
+        role: profile.role,
+        fullName: profile.full_name
+        // firstName: profile?.first_name ?? '',
+        // lastName: profile?.last_name ?? '',
+        // avatarUrl: profile?.avatar_url ?? null,
+      },
+      session: tokens,
+    };
+  }
 
   async refresh(refreshToken: string) {
     try {

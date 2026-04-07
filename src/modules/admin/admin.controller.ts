@@ -238,6 +238,17 @@ export class AdminController {
   ) {
     return this.pricing.updateInstitutionPricing(id, dto, admin.email);
   }
+  @Post("pricing/tokens/sync")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "⟳ Sync token products from VTPass",
+    description:
+      "Fetches latest token prices from VTPass API and updates your database. " +
+      "This may take 30–60 seconds to complete.",
+  })
+  syncTokenProducts(@CurrentAdmin() admin: AdminUser) {
+    return this.pricing.syncTokenFromVtpass(admin.email);
+  }
 
   // ── Bill product sync ─────────────────────────────────────────
 

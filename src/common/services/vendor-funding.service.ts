@@ -94,7 +94,7 @@ export class VendorFundingService {
         thresholds:        remitaThreshold,
         lastTopup:         lastRemitaTopup,
         projectedRunway:   remitaProjection,
-        usedFor:           'Token purchases — WAEC, NECO, JAMB, NABTEB',
+        usedFor:           'Token purchases — NECO, NABTEB',
         howToTopUp:        'See GET /admin/vendor-funding/bank-accounts for transfer details',
       },
       vtpass: {
@@ -105,7 +105,7 @@ export class VendorFundingService {
         thresholds:        vtpassThreshold,
         lastTopup:         lastVtpassTopup,
         projectedRunway:   vtpassProjection,
-        usedFor:           'Bills — Airtime, Data, Electricity, Cable TV',
+        usedFor:           'Bills — Airtime, Data, WAEC, JAMB',
         howToTopUp:        'See GET /admin/vendor-funding/bank-accounts for transfer details',
       },
       note: 'These are your PREFUNDED vendor accounts. Top them up by bank transfer. Paystack (wallet funding) settles to your main bank — check dashboard.paystack.com',

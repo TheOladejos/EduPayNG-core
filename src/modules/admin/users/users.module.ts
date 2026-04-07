@@ -24,11 +24,13 @@ export class AdminUsersService {
 
   async listUsers(query: PaginationDto & { search?: string }) {
     const page = query.page ?? 1; const limit = query.limit ?? 25; const offset = (page-1)*limit;
-    let q = this.supabase.admin.from('profiles')
+    let { data, count, error } = await this.supabase.admin.from('profiles')
       .select('id, first_name, last_name, phone, state_of_origin, email_verified, phone_verified, created_at, wallets(balance, points, total_funded, total_spent)', { count: 'exact' })
       .order('created_at', { ascending: false }).range(offset, offset+limit-1);
-    if (query.search) q = q.or(`first_name.ilike.%${query.search}%,last_name.ilike.%${query.search}%,phone.ilike.%${query.search}%`);
-    const { data, count, error } = await q;
+      
+
+    // if (query.search) q = q.or(`first_name.ilike.%${query.search}%,last_name.ilike.%${query.search}%,phone.ilike.%${query.search}%`);
+    // const  = await q;
     if (error) throw new BadRequestException(error.message);
     return paginate(data ?? [], count ?? 0, page, limit);
   }

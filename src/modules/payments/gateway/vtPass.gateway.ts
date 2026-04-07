@@ -203,14 +203,15 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
     amountNaira: number;
   }): Promise<VtpassBillResult> {
     const requestId = this.genRequestId();
-    const { data } = await this.http.post("/pay", {
+    const payload = {
       request_id: requestId,
       serviceID: params.serviceId,
       amount: params.amountNaira,
       phone: params.phone,
-    });
+    };
+    const result = await this.http.post("/pay", payload);
 
-    return this.parseBillResult(requestId, data);
+    return this.parseBillResult(requestId, result.data);
   }
 
   // ── Purchase data bundle ──────────────────────────────────────

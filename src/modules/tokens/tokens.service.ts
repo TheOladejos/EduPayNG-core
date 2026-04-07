@@ -388,7 +388,7 @@ export class TokensService {
       if (gateway === VTPASS_GATEWAY) {
         const userPhone = await this.getUserPhone(userId);
         purchasedTokens = await this.vtpass.purchaseToken({
-          serviceId: institution.code.toLowerCase(),
+          serviceId: institution.vtpass_service_id,
           quantity,
           reference,
           phone: userPhone, 

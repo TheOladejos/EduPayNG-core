@@ -14,6 +14,7 @@ import { generateRef } from "../../common/helpers/generators";
 import { BuyAirtimeDto, BuyDataDto } from "./bills.dto";
 import { VtpassService } from "@modules/payments/gateway/vtPass.gateway";
 import { categorizeData } from "@common/helpers/helpers";
+import { log } from "console";
 
 @Injectable()
 export class BillsService implements OnModuleDestroy {
@@ -115,6 +116,7 @@ export class BillsService implements OnModuleDestroy {
         phone: dto.phone,
         amountNaira: dto.amount,
       });
+      
 
       if (result.status === "delivered") {
         await this.handleBillSuccess(
@@ -310,7 +312,7 @@ export class BillsService implements OnModuleDestroy {
     return data;
   }
   private async getAndSetProductCache(billerId:string) {
-    const cached = this.productCache.get("all");
+    const cached = this.productCache.get(billerId);
     if (cached) return cached;
 
     const { data, error } = await this.supabase.admin
@@ -326,7 +328,7 @@ export class BillsService implements OnModuleDestroy {
         "Failed to load biller configuration",
       );
     }
-    this.productCache.set("all", data); // Cache all billers for quick access during purchase flow
+    this.productCache.set(billerId, data); // Cache products for the specific biller
     return data;
   }
 

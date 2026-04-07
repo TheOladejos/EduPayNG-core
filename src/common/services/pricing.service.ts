@@ -100,6 +100,8 @@ export class PricingService {
     };
   }
 
+
+
   async syncTokenFromVtpass(adminEmail: string): Promise<{
     updated: number;
     errors: string[];
@@ -115,28 +117,30 @@ export class PricingService {
     for (const institution of institutions ?? []) {
       try {
         this.logger.log(
-          `Syncing products for ${institution.short_name} - (${institution.code.toLowerCase()})`,
+          `Syncing products for ${institution.short_name} - (${institution.vtpass_service_id})`,
         );
 
         const variations = await this.vtpass.getVariations(
-          institution.code.toLowerCase(),
+          institution.vtpass_service_id,
         );
 
         if (!variations.length) {
           this.logger.warn(
-            `No variations returned for ${institution.code.toLowerCase()}`,
+            `No variations returned for ${institution.vtpass_service_id}`,
           );
           continue;
         }
 
         // Upsert each variation into bill_products
         for (const v of variations) {
+
           // Update if price changed
           if (Number(institution.vendor_cost) !== Number(v.variationAmount)) {
             await this.supabase.admin
               .from("institutions")
               .update({
                 vendor_cost: Number(v.variationAmount),
+                token_price: Number(v.variationAmount), // Keep price in sync with vendor cost to avoid negative margins — admin can adjust selling price separately if they want a margin
                 vtpass_code: v.variationCode,
                 short_name: v.name,
               })
