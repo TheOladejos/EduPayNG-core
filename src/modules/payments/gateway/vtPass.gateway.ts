@@ -7,6 +7,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
+import { log } from "console";
 import { v4 as uuid } from "uuid";
 
 export interface VtpassBillResult {
@@ -87,6 +88,7 @@ export class VtpassService implements OnModuleInit, OnModuleDestroy {
   async checkPrefundBalance(): Promise<{ balance: number; currency: string }> {
     try {
       const { data } = await this.http.get("/balance");
+      this.logger.debug(`VTPass balance response: ${JSON.stringify(data)}`);
       return {
         balance: Number(data.contents?.balance ?? 0),
         currency: "NGN",
